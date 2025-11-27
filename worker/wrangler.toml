@@ -1,0 +1,11 @@
+name = "cf-dice-worker"
+compatibility_date = "2024-05-01"
+main = "src/index.ts"
+
+[vars]
+GOOGLE_CLIENT_ID = "set-your-client-id"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "dice-db"
+database_id = "00000000-0000-0000-0000-000000000000"
