@@ -7,20 +7,15 @@
         <p class="muted">参加情報とチャットを管理します。チャットは日本語コマンドにも対応しています。</p>
       </div>
       <div class="panel compact">
-        <h2>セッション参加</h2>
-        <p class="muted">このセッションに参加します。名前を入力して参加してください。</p>
+        <h2>表示名</h2>
+        <p class="muted">チャットに表示される名前を設定します。未設定の場合は「{{ anonymousName }}」として扱われます。</p>
         <label>
           <span>名前</span>
-          <input v-model="join.name" placeholder="名前 (任意)" />
+          <input v-model="displayName" placeholder="名前 (任意)" />
         </label>
         <div class="actions">
-          <button class="primary" :disabled="isJoining" @click="joinSession">
-            {{ isJoining ? '参加中…' : '参加する' }}
-          </button>
-          <p v-if="joinError" class="error">{{ joinError }}</p>
-        </div>
-        <div v-if="participant" class="status">
-          {{ participant.name }} として参加中 (ID: {{ participant.participantId }})
+          <button class="primary" @click="saveDisplayName">保存</button>
+          <p class="muted">現在: {{ effectiveName }}</p>
         </div>
       </div>
     </section>
@@ -59,6 +54,7 @@
           <div v-for="msg in messages" :key="msg.id" class="log-card">
             <div class="log-header">
               <span class="timestamp">{{ formatDate(msg.created_at) }}</span>
+              <span class="speaker">{{ msg.speaker_name || anonymousName }}</span>
             </div>
             <p class="muted">元チャット: {{ msg.raw_text }}</p>
             <p>結果: {{ msg.rendered_text }}</p>
@@ -71,7 +67,7 @@
 
 <script setup lang="ts">
 import axios from 'axios';
-import { onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import ChatPaletteEditor from '../components/ChatPaletteEditor.vue';
 import KPControls from '../components/KPControls.vue';
@@ -81,13 +77,11 @@ const apiBase = import.meta.env.VITE_WORKER_BASE ?? '';
 const route = useRoute();
 const sessionId = ref<string | null>((route.params.id as string) ?? null);
 
-const participantRaw = sessionId.value ? localStorage.getItem(`kp-participant-${sessionId.value}`) : null;
-const participant = ref<{ participantId: string; name: string } | null>(participantRaw ? JSON.parse(participantRaw) : null);
-const join = reactive({ name: '' });
-const isJoining = ref(false);
-const joinError = ref('');
+const anonymousName = '名無しさん';
+const displayName = ref('');
+const effectiveName = computed(() => displayName.value.trim() || anonymousName);
 
-type Message = { id: string; created_at: number; raw_text: string; rendered_text: string };
+type Message = { id: string; created_at: number; raw_text: string; rendered_text: string; speaker_name?: string };
 type PaletteItem = { label: string; content: string };
 
 const chat = reactive({ text: '' });
@@ -100,18 +94,10 @@ watch(
   (val) => {
     sessionId.value = val as string;
     if (sessionId.value) {
-      const storedParticipant = localStorage.getItem(`kp-participant-${sessionId.value}`);
-      participant.value = storedParticipant ? JSON.parse(storedParticipant) : null;
       loadMessages();
       loadPalette();
+      loadDisplayName();
     }
-  }
-);
-
-watch(
-  () => participant.value,
-  () => {
-    loadPalette();
   }
 );
 
@@ -124,7 +110,7 @@ async function sendChat() {
   chatError.value = '';
   try {
     await axios.post(`${apiBase}/api/sessions/${sessionId.value}/messages`, {
-      participantId: participant.value?.participantId ?? null,
+      speakerName: effectiveName.value,
       text: chat.text
     });
     chat.text = '';
@@ -141,35 +127,14 @@ async function loadMessages() {
 }
 
 async function savePalette(val: Array<{ label: string; content: string }>) {
-  if (!participant.value || !sessionId.value) return;
-  await axios.post(`${apiBase}/api/sessions/${sessionId.value}/palettes`, {
-    participantId: participant.value.participantId,
-    items: val
-  });
+  if (!sessionId.value) return;
+  localStorage.setItem(`kp-palette-${sessionId.value}`, JSON.stringify(val));
 }
 
 async function loadPalette() {
-  if (!participant.value || !sessionId.value) return;
-  const res = await axios.get(`${apiBase}/api/sessions/${sessionId.value}/palettes/${participant.value.participantId}`);
-  palette.value = (res.data.items ?? []) as PaletteItem[];
-}
-
-async function joinSession() {
-  if (!sessionId.value || isJoining.value) return;
-  joinError.value = '';
-  isJoining.value = true;
-  try {
-    const res = await axios.post(`${apiBase}/api/sessions/${sessionId.value}/join`, { name: join.name });
-    participant.value = {
-      participantId: res.data.participantId,
-      name: join.name || 'ゲスト'
-    };
-    localStorage.setItem(`kp-participant-${sessionId.value}`, JSON.stringify(participant.value));
-  } catch (err) {
-    joinError.value = (err as Error).message ?? '参加に失敗しました';
-  } finally {
-    isJoining.value = false;
-  }
+  if (!sessionId.value) return;
+  const stored = localStorage.getItem(`kp-palette-${sessionId.value}`);
+  palette.value = stored ? JSON.parse(stored) : [];
 }
 
 async function applyKP(payload: {
@@ -198,5 +163,17 @@ async function downloadLog() {
 onMounted(() => {
   loadMessages();
   loadPalette();
+  loadDisplayName();
 });
+
+function loadDisplayName() {
+  if (!sessionId.value) return;
+  const stored = localStorage.getItem(`kp-name-${sessionId.value}`);
+  displayName.value = stored ?? '';
+}
+
+function saveDisplayName() {
+  if (!sessionId.value) return;
+  localStorage.setItem(`kp-name-${sessionId.value}`, displayName.value.trim());
+}
 </script>

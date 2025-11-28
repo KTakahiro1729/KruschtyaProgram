@@ -131,11 +131,6 @@ async function removeOldSessions(db: D1Database, ownerId: string) {
   const toRemove = ids.slice(0, ids.length - 9);
   for (const id of toRemove) {
     await db.prepare('DELETE FROM chat_messages WHERE session_id = ?').bind(id).run();
-    await db
-      .prepare('DELETE FROM chat_palettes WHERE participant_id IN (SELECT id FROM participants WHERE session_id = ?)')
-      .bind(id)
-      .run();
-    await db.prepare('DELETE FROM participants WHERE session_id = ?').bind(id).run();
     await db.prepare('DELETE FROM quantum_numbers WHERE session_id = ?').bind(id).run();
     await db.prepare('DELETE FROM session_tokens WHERE session_id = ?').bind(id).run();
     await db.prepare('DELETE FROM sessions WHERE id = ?').bind(id).run();
@@ -211,7 +206,7 @@ async function getRng(db: D1Database, sessionId: string, mode: string, manualTim
   return async () => rng.rand(100) / 100;
 }
 
-async function handleMessage(db: D1Database, sessionId: string, participantId: string | null, raw: string) {
+async function handleMessage(db: D1Database, sessionId: string, speakerName: string, raw: string) {
   const session = await db
     .prepare('SELECT mode, manual_time, current_time_offset FROM sessions WHERE id = ?')
     .bind(sessionId)
@@ -236,10 +231,10 @@ async function handleMessage(db: D1Database, sessionId: string, participantId: s
   const ts = nowMs();
   const id = uuid();
   await db
-    .prepare('INSERT INTO chat_messages (id, session_id, participant_id, raw_text, rendered_text, result_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .bind(id, sessionId, participantId, raw, rendered, result ? JSON.stringify(result) : null, ts)
+    .prepare('INSERT INTO chat_messages (id, session_id, speaker_name, raw_text, rendered_text, result_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .bind(id, sessionId, speakerName || '名無しさん', raw, rendered, result ? JSON.stringify(result) : null, ts)
     .run();
-  return { id, rendered_text: rendered, created_at: ts, raw_text: raw };
+  return { id, rendered_text: rendered, created_at: ts, raw_text: raw, speaker_name: speakerName || '名無しさん' };
 }
 
 const loginSchema = z.object({ idToken: z.string().min(1, 'idToken is required') });
@@ -311,25 +306,11 @@ app.post('/api/sessions', async (c) => {
   return c.json({ sessionId, password });
 });
 
-app.post('/api/sessions/:id/join', async (c) => {
-  const sessionId = c.req.param('id');
-  const { name } = await c.req.json();
-  const session = await c.env.DB.prepare('SELECT id FROM sessions WHERE id = ?').bind(sessionId).first();
-  if (!session) return c.json({ error: 'Session not found' }, 404);
-  const ts = nowMs();
-  const pid = uuid();
-  await c.env.DB
-    .prepare('INSERT INTO participants (id, session_id, name, created_at) VALUES (?, ?, ?, ?)')
-    .bind(pid, sessionId, name ?? 'Guest', ts)
-    .run();
-  return c.json({ participantId: pid });
-});
-
 app.post('/api/sessions/:id/messages', async (c) => {
   const sessionId = c.req.param('id');
-  const { participantId, text } = await c.req.json();
+  const { speakerName, text } = await c.req.json();
   if (!text) return c.json({ error: 'Missing text' }, 400);
-  const message = await handleMessage(c.env.DB, sessionId, participantId ?? null, text);
+  const message = await handleMessage(c.env.DB, sessionId, speakerName ?? '名無しさん', text);
   return c.json({ message });
 });
 
@@ -337,27 +318,6 @@ app.get('/api/sessions/:id/messages', async (c) => {
   const sessionId = c.req.param('id');
   const rows = await c.env.DB.prepare('SELECT * FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC').bind(sessionId).all();
   return c.json({ messages: rows.results ?? [] });
-});
-
-app.post('/api/sessions/:id/palettes', async (c) => {
-  const sessionId = c.req.param('id');
-  const { participantId, items } = await c.req.json();
-  if (!participantId || !Array.isArray(items)) return c.json({ error: 'Invalid payload' }, 400);
-  await c.env.DB.prepare('DELETE FROM chat_palettes WHERE participant_id = ?').bind(participantId).run();
-  const ts = nowMs();
-  for (const item of items) {
-    await c.env.DB
-      .prepare('INSERT INTO chat_palettes (id, participant_id, label, content, created_at) VALUES (?, ?, ?, ?, ?)')
-      .bind(uuid(), participantId, item.label, item.content, ts)
-      .run();
-  }
-  return c.json({ ok: true });
-});
-
-app.get('/api/sessions/:id/palettes/:participantId', async (c) => {
-  const { participantId } = c.req.param();
-  const rows = await c.env.DB.prepare('SELECT * FROM chat_palettes WHERE participant_id = ?').bind(participantId).all();
-  return c.json({ items: rows.results ?? [] });
 });
 
 app.post('/api/sessions/:id/kp', async (c) => {

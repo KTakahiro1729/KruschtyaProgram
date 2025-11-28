@@ -26,33 +26,15 @@ CREATE TABLE IF NOT EXISTS session_tokens (
   FOREIGN KEY(session_id) REFERENCES sessions(id)
 );
 
-CREATE TABLE IF NOT EXISTS participants (
-  id TEXT PRIMARY KEY,
-  session_id TEXT NOT NULL,
-  name TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  FOREIGN KEY(session_id) REFERENCES sessions(id)
-);
-
 CREATE TABLE IF NOT EXISTS chat_messages (
   id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL,
-  participant_id TEXT,
+  speaker_name TEXT NOT NULL DEFAULT '名無しさん',
   raw_text TEXT NOT NULL,
   rendered_text TEXT NOT NULL,
   result_json TEXT,
   created_at INTEGER NOT NULL,
-  FOREIGN KEY(session_id) REFERENCES sessions(id),
-  FOREIGN KEY(participant_id) REFERENCES participants(id)
-);
-
-CREATE TABLE IF NOT EXISTS chat_palettes (
-  id TEXT PRIMARY KEY,
-  participant_id TEXT NOT NULL,
-  label TEXT NOT NULL,
-  content TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  FOREIGN KEY(participant_id) REFERENCES participants(id)
+  FOREIGN KEY(session_id) REFERENCES sessions(id)
 );
 
 CREATE TABLE IF NOT EXISTS quantum_numbers (
@@ -64,7 +46,6 @@ CREATE TABLE IF NOT EXISTS quantum_numbers (
 );
 
 CREATE INDEX IF NOT EXISTS idx_session_tokens_session ON session_tokens(session_id);
-CREATE INDEX IF NOT EXISTS idx_participants_session ON participants(session_id);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON chat_messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_quantum_session_consumed ON quantum_numbers(session_id, consumed);
 
