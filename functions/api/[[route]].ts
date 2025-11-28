@@ -92,6 +92,25 @@ app.use('*', cors());
 const nowMs = () => Date.now();
 const uuid = () => crypto.randomUUID();
 
+type SessionState = {
+  mode: string;
+  game_time_elapsed: number;
+  last_resumed_at: number | null;
+};
+
+function normalizeSessionState(row: Record<string, unknown>): SessionState {
+  return {
+    mode: String(row.mode ?? 'system'),
+    game_time_elapsed: Number(row.game_time_elapsed ?? 0),
+    last_resumed_at: row.last_resumed_at === null || row.last_resumed_at === undefined ? null : Number(row.last_resumed_at)
+  };
+}
+
+function computeGameTime(state: SessionState, reference = nowMs()) {
+  if (state.last_resumed_at === null) return state.game_time_elapsed;
+  return state.game_time_elapsed + (reference - state.last_resumed_at);
+}
+
 async function fetchQuantumNumbers(): Promise<number[] | null> {
   try {
     const res = await fetch(Q_RANDOM_ENDPOINT);
@@ -156,6 +175,48 @@ async function nextQuantumNumber(db: D1Database, sessionId: string): Promise<num
   return Number(res.value);
 }
 
+async function getSessionState(db: D1Database, sessionId: string): Promise<SessionState | null> {
+  const row = await db
+    .prepare('SELECT mode, game_time_elapsed, last_resumed_at FROM sessions WHERE id = ?')
+    .bind(sessionId)
+    .first<Record<string, unknown>>();
+  if (!row) return null;
+  return normalizeSessionState(row);
+}
+
+async function pauseSession(db: D1Database, sessionId: string, now = nowMs()) {
+  const state = await getSessionState(db, sessionId);
+  if (!state) throw new Error('Session not found');
+  if (state.last_resumed_at === null) return state;
+  const updatedElapsed = state.game_time_elapsed + (now - state.last_resumed_at);
+  await db
+    .prepare('UPDATE sessions SET game_time_elapsed = ?, last_resumed_at = NULL, last_updated = ? WHERE id = ?')
+    .bind(updatedElapsed, now, sessionId)
+    .run();
+  return { ...state, game_time_elapsed: updatedElapsed, last_resumed_at: null } satisfies SessionState;
+}
+
+async function resumeSession(db: D1Database, sessionId: string, now = nowMs()) {
+  const state = await getSessionState(db, sessionId);
+  if (!state) throw new Error('Session not found');
+  if (state.last_resumed_at !== null) return state;
+  await db
+    .prepare('UPDATE sessions SET last_resumed_at = ?, last_updated = ? WHERE id = ?')
+    .bind(now, now, sessionId)
+    .run();
+  return { ...state, last_resumed_at: now } satisfies SessionState;
+}
+
+async function setGameTime(db: D1Database, sessionId: string, gameTime: number, now = nowMs()) {
+  const state = await getSessionState(db, sessionId);
+  if (!state) throw new Error('Session not found');
+  await db
+    .prepare('UPDATE sessions SET game_time_elapsed = ?, last_resumed_at = NULL, last_updated = ? WHERE id = ?')
+    .bind(gameTime, now, sessionId)
+    .run();
+  return { ...state, game_time_elapsed: gameTime, last_resumed_at: null } satisfies SessionState;
+}
+
 function parseDiceCommand(text: string) {
   const trimmed = text.trim();
   const ccMatch = /^CC\s*([+-]?\d+)?\s*<=\s*(\d+)/i.exec(trimmed);
@@ -203,7 +264,7 @@ async function rollDie(rng: () => Promise<number>, faces: number) {
   return results;
 }
 
-async function getRng(db: D1Database, sessionId: string, mode: string, manualTime?: number, offset?: number) {
+async function getRng(db: D1Database, sessionId: string, mode: string, gameTimeMs: number) {
   if (mode === 'quantum') {
     return async () => {
       const q = await nextQuantumNumber(db, sessionId);
@@ -212,21 +273,17 @@ async function getRng(db: D1Database, sessionId: string, mode: string, manualTim
       return fallback / 100;
     };
   }
-  const baseSeed = Math.floor(((manualTime ?? nowMs()) + (offset ?? 0)) / 1000);
+  const baseSeed = Math.floor(gameTimeMs / 1000);
   const rng = new RubyRandom(baseSeed);
   return async () => rng.rand(100) / 100;
 }
 
 async function handleMessage(db: D1Database, sessionId: string, speakerName: string, raw: string) {
-  const session = await db
-    .prepare('SELECT mode, manual_time, current_time_offset FROM sessions WHERE id = ?')
-    .bind(sessionId)
-    .first<Record<string, unknown>>();
+  const session = await getSessionState(db, sessionId);
   if (!session) throw new Error('Session not found');
-  const mode = String(session.mode);
-  const manualTime = session.manual_time as number | null;
-  const offset = session.current_time_offset as number | null;
-  const rng = await getRng(db, sessionId, mode, manualTime ?? undefined, offset ?? undefined);
+  const mode = session.mode;
+  const gameTime = computeGameTime(session);
+  const rng = await getRng(db, sessionId, mode, gameTime);
   const parsed = parseDiceCommand(raw.split(' ')[0]);
   let rendered = raw;
   let result: Record<string, unknown> | null = null;
@@ -305,8 +362,10 @@ app.post('/api/sessions', async (c) => {
   const password = crypto.randomUUID().slice(0, 8);
   const ts = nowMs();
   await c.env.DB
-    .prepare('INSERT INTO sessions (id, owner_id, password, created_at, last_updated, mode) VALUES (?, ?, ?, ?, ?, ?)')
-    .bind(sessionId, user.id, password, ts, ts, 'system')
+    .prepare(
+      'INSERT INTO sessions (id, owner_id, password, created_at, last_updated, mode, game_time_elapsed, last_resumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    )
+    .bind(sessionId, user.id, password, ts, ts, 'system', 0, ts)
     .run();
   await c.env.DB
     .prepare('INSERT INTO session_tokens (id, session_id, password, created_at) VALUES (?, ?, ?, ?)')
@@ -319,15 +378,24 @@ app.post('/api/sessions', async (c) => {
 
 app.get('/api/sessions/:id/info', async (c) => {
   const sessionId = c.req.param('id');
-  const session = await c.env.DB.prepare('SELECT password FROM sessions WHERE id = ?').bind(sessionId).first<{ password: string }>();
-  if (!session) return c.json({ error: 'Session not found' }, 404);
+  const session = await c.env.DB
+    .prepare('SELECT password, mode, game_time_elapsed, last_resumed_at FROM sessions WHERE id = ?')
+    .bind(sessionId)
+    .first<Record<string, unknown>>();
+  if (!session || typeof session.password !== 'string') return c.json({ error: 'Session not found' }, 404);
 
   const msgBuffer = new TextEncoder().encode(session.password);
   const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
 
-  return c.json({ passwordHash: hashHex });
+  const state = normalizeSessionState(session);
+  const gameTime = computeGameTime(state);
+
+  return c.json({
+    passwordHash: hashHex,
+    state: { ...state, gameTime, running: state.last_resumed_at !== null }
+  });
 });
 
 app.post('/api/sessions/:id/messages', async (c) => {
@@ -346,18 +414,41 @@ app.get('/api/sessions/:id/messages', async (c) => {
 
 app.post('/api/sessions/:id/kp', async (c) => {
   const sessionId = c.req.param('id');
-  const { password, mode, manualTime, offset, confirmQuantum } = await c.req.json();
-  const session = await c.env.DB.prepare('SELECT password FROM sessions WHERE id = ?').bind(sessionId).first<{ password: string }>();
+  const { password, mode, setTime, action, confirmQuantum } = await c.req.json();
+  const session = await c.env.DB
+    .prepare('SELECT password FROM sessions WHERE id = ?')
+    .bind(sessionId)
+    .first<{ password: string }>();
   if (!session) return c.json({ error: 'Session not found' }, 404);
   if (session.password !== password) return c.json({ error: 'Forbidden' }, 403);
   if (mode === 'quantum' && !confirmQuantum) {
     return c.json({ error: 'Quantum mode requires confirmation' }, 400);
   }
+
+  const now = nowMs();
+  let state = await getSessionState(c.env.DB, sessionId);
+  if (!state) return c.json({ error: 'Session not found' }, 404);
+  const desiredMode = typeof mode === 'string' ? mode : state.mode;
+
+  if (typeof setTime === 'number' && !Number.isNaN(setTime)) {
+    state = await setGameTime(c.env.DB, sessionId, setTime, now);
+  }
+
+  if (action === 'pause') {
+    state = await pauseSession(c.env.DB, sessionId, now);
+  } else if (action === 'resume') {
+    state = await resumeSession(c.env.DB, sessionId, now);
+  }
+
   await c.env.DB
-    .prepare('UPDATE sessions SET mode = ?, manual_time = ?, current_time_offset = ? WHERE id = ?')
-    .bind(mode ?? 'system', manualTime ?? null, offset ?? 0, sessionId)
+    .prepare('UPDATE sessions SET mode = ?, last_updated = ? WHERE id = ?')
+    .bind(desiredMode ?? 'system', now, sessionId)
     .run();
-  return c.json({ ok: true });
+
+  state = (await getSessionState(c.env.DB, sessionId)) ?? state;
+  const gameTime = computeGameTime(state);
+
+  return c.json({ ok: true, state: { ...state, mode: desiredMode, gameTime } });
 });
 
 app.get('/api/sessions/:id/logs', async (c) => {
