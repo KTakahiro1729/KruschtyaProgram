@@ -5,6 +5,7 @@ pages_functions_dir = "./functions"
 
 [vars]
 GOOGLE_CLIENT_ID = "465792064386-2g9rcesrhk2enbrlhg7ph4lrg106a75v.apps.googleusercontent.com"
+VITE_GOOGLE_CLIENT_ID = "465792064386-2g9rcesrhk2enbrlhg7ph4lrg106a75v.apps.googleusercontent.com"
 
 [[d1_databases]]
 binding = "DB"
