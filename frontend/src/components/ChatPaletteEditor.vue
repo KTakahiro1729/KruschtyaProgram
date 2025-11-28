@@ -1,13 +1,15 @@
 <template>
-  <div class="card">
+  <div>
     <h3>チャットパレット</h3>
-    <div v-for="(item, index) in localItems" :key="index" style="display: grid; grid-template-columns: 1fr 2fr auto; gap: 8px; align-items: center; margin-bottom: 8px;">
+    <div class="palette-grid" v-for="(item, index) in localItems" :key="index">
       <input v-model="item.label" placeholder="ラベル" />
       <input v-model="item.content" placeholder="内容" />
-      <button @click="remove(index)">削除</button>
+      <button class="ghost" @click="remove(index)">削除</button>
     </div>
-    <button @click="add">追加</button>
-    <button style="margin-left: 8px" @click="save">保存</button>
+    <div class="actions">
+      <button class="primary" @click="add">追加</button>
+      <button class="ghost" @click="save">保存</button>
+    </div>
   </div>
 </template>
 
