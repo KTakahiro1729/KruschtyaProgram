@@ -1,41 +1,50 @@
 <template>
-  <div class="page">
-    <section class="panel hero">
-      <div>
-        <p class="eyebrow">セッション作成</p>
-        <h1>Cloudflare Dice Room</h1>
-        <p class="lede">
-          Googleでログインし、新しいセッションを作成します。作成後に発行されるIDとパスワードを共有してください。
-        </p>
-      </div>
-      <div class="panel compact">
-        <h2>ログイン</h2>
-        <p class="muted">Googleのポップアップから認証します。成功するとプロフィールが保持されます。</p>
-        <GoogleLogin :callback="onGoogleLogin" ux_mode="popup" type="standard" size="large" text="signin_with" />
-        <p v-if="user" class="status">ログイン済み: {{ user.name }} ({{ user.email }})</p>
-        <p v-if="loginError" class="error">{{ loginError }}</p>
-      </div>
-    </section>
-
-    <section class="grid single">
-      <div class="panel">
-        <h2>セッション作成</h2>
-        <p class="muted">KPとして新しいセッションを立ち上げます。ログインしている必要があります。</p>
-        <button class="primary" :disabled="!user || isCreating" @click="createSession">
-          {{ isCreating ? '作成中…' : 'セッションを作成する' }}
-        </button>
-        <div v-if="session.sessionId" class="info">
-          <p>セッションID: {{ session.sessionId }}</p>
-          <p>パスワード: {{ session.password }}</p>
-          <p class="muted">参加者にはセッションURLを共有してください。</p>
-        <div style="margin-top: 12px;">
-          <RouterLink :to="`/session/${session.sessionId}`" custom v-slot="{ navigate }">
-            <button class="primary" @click="navigate">セッションに入室する</button>
-          </RouterLink>
-          </div>
+  <div class="min-h-[100dvh] bg-slate-900 text-slate-100 px-4 py-8">
+    <div class="mx-auto flex w-full max-w-5xl flex-col gap-6">
+      <header class="flex flex-col gap-2 rounded-2xl border border-slate-800 bg-slate-800/60 p-6 shadow-xl shadow-black/30 md:flex-row md:items-center md:justify-between">
+        <div>
+          <p class="text-[10px] uppercase tracking-[0.2em] text-indigo-300">セッション作成</p>
+          <h1 class="text-2xl font-semibold">Cloudflare Dice Room</h1>
+          <p class="text-sm text-slate-400">Googleでログインし、新しいセッションを作成します。発行されたIDとパスワードを参加者と共有してください。</p>
         </div>
+        <div class="rounded-xl border border-slate-700 bg-slate-900/60 p-4 text-sm text-slate-300">
+          <p class="text-xs text-slate-500">ログイン状態</p>
+          <p v-if="user" class="font-semibold">{{ user.name }} ({{ user.email }})</p>
+          <p v-else class="text-slate-500">未ログイン</p>
+        </div>
+      </header>
+
+      <div class="grid gap-4 md:grid-cols-2">
+        <section class="rounded-2xl border border-slate-800 bg-slate-800/60 p-6 shadow-lg shadow-black/20 space-y-4">
+          <h2 class="text-lg font-semibold">ログイン</h2>
+          <p class="text-sm text-slate-400">Googleのポップアップから認証します。成功するとプロフィールが保持されます。</p>
+          <GoogleLogin :callback="onGoogleLogin" ux_mode="popup" type="standard" size="large" text="signin_with" />
+          <p v-if="loginError" class="text-sm text-rose-400">{{ loginError }}</p>
+        </section>
+
+        <section class="rounded-2xl border border-slate-800 bg-slate-800/60 p-6 shadow-lg shadow-black/20 space-y-4">
+          <h2 class="text-lg font-semibold">セッション作成</h2>
+          <p class="text-sm text-slate-400">KPとして新しいセッションを立ち上げます。ログインしている必要があります。</p>
+          <button
+            class="w-full rounded-lg bg-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-900/40 transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-slate-700"
+            :disabled="!user || isCreating"
+            @click="createSession"
+          >
+            {{ isCreating ? '作成中…' : 'セッションを作成する' }}
+          </button>
+          <div v-if="session.sessionId" class="rounded-lg border border-slate-700 bg-slate-900/40 p-4 space-y-2 text-sm">
+            <p>セッションID: <span class="font-mono">{{ session.sessionId }}</span></p>
+            <p>パスワード: <span class="font-mono">{{ session.password }}</span></p>
+            <p class="text-slate-400">参加者にはセッションURLを共有してください。</p>
+            <RouterLink :to="`/session/${session.sessionId}`" custom v-slot="{ navigate }">
+              <button class="mt-2 w-full rounded-lg border border-indigo-500 px-4 py-2 text-indigo-200 transition hover:bg-indigo-500/10" @click="navigate">
+                セッションに入室する
+              </button>
+            </RouterLink>
+          </div>
+        </section>
       </div>
-    </section>
+    </div>
   </div>
 </template>
 
