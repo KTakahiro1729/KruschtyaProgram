@@ -1,5 +1,7 @@
 # Testing Guide
 
+Set `BASE` to your running Pages dev server (e.g., `http://localhost:8788` when using `npm run pages:dev`).
+
 ## Auth
 - Invalid token (expects 401):
   ```bash
