@@ -160,6 +160,16 @@ select {
   gap: 10px;
 }
 
+.auth-buttons {
+  align-items: center;
+}
+
+.gis-button {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+
 .action-row {
   display: flex;
   align-items: center;

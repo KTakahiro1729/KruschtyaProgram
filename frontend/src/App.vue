@@ -24,18 +24,17 @@
         </div>
         <div class="card__body two-column">
           <div class="stack">
-            <p class="muted">Google Identity Services等で取得した <code>id_token</code> を貼り付け、ログインを行います。</p>
-            <div class="field-group">
-              <label class="field">
-                <span>id_token</span>
-                <input v-model="login.idToken" placeholder="Google ID token" />
-              </label>
-              <button class="btn btn--primary" :disabled="!login.idToken" @click="loginUser">
-                <span class="icon"></span>
-                Googleログイン
+            <p class="muted">
+              Googleアカウントでサインインします。ポップアップ/リダイレクトで完結し、トークンの貼り付けは不要です。
+            </p>
+            <div class="field-group auth-buttons">
+              <div class="gis-button" ref="googleButtonRef"></div>
+              <button class="btn btn--ghost" @click="promptGoogleLogin" :disabled="isLoggingIn || !googleReady">
+                {{ isLoggingIn ? 'ログイン中…' : 'ポップアップが表示されない場合はこちら' }}
               </button>
             </div>
-            <p v-if="user" class="hint success">ログイン済み: {{ user.name }} ({{ user.email }})</p>
+            <p v-if="loginError" class="hint error">{{ loginError }}</p>
+            <p v-else-if="user" class="hint success">ログイン済み: {{ user.name }} ({{ user.email }})</p>
             <p v-else class="hint">ログイン後にセッションを作成できます。</p>
           </div>
           <div class="stack">
@@ -277,7 +276,16 @@
 import axios from 'axios';
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 
+declare global {
+  interface Window {
+    google?: any;
+  }
+}
+
 const apiBase = import.meta.env.VITE_WORKER_BASE ?? '';
+const googleClientId =
+  import.meta.env.VITE_GOOGLE_CLIENT_ID ??
+  '465792064386-2g9rcesrhk2enbrlhg7ph4lrg106a75v.apps.googleusercontent.com';
 
 interface User {
   id: string;
@@ -302,7 +310,6 @@ interface PaletteItem {
   content: string;
 }
 
-const login = reactive({ idToken: '' });
 const user = ref<User | null>(null);
 const session = reactive({ sessionId: '', password: '' });
 const join = reactive({ sessionId: '', name: '' });
@@ -317,6 +324,10 @@ const palette = ref<PaletteItem[]>([]);
 const paletteEditMode = ref(false);
 const paletteText = ref('');
 const logPane = ref<HTMLElement | null>(null);
+const googleButtonRef = ref<HTMLElement | null>(null);
+const googleReady = ref(false);
+const loginError = ref('');
+const isLoggingIn = ref(false);
 
 const gameClock = ref<number>(Date.now());
 const kpSettings = reactive({
@@ -344,6 +355,7 @@ onMounted(() => {
       gameClock.value = gameClock.value + 1000;
     }
   }, 1000);
+  initGoogle();
 });
 
 onUnmounted(() => {
@@ -353,6 +365,61 @@ onUnmounted(() => {
 watch(palette, () => {
   paletteText.value = palette.value.map((item) => item.content).join('\n');
 });
+
+async function loadGoogleScript() {
+  if (document.getElementById('google-identity')) return;
+  await new Promise<void>((resolve, reject) => {
+    const script = document.createElement('script');
+    script.id = 'google-identity';
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.defer = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('Googleスクリプトの読み込みに失敗しました。'));
+    document.head.appendChild(script);
+  });
+}
+
+async function initGoogle() {
+  if (!googleClientId) {
+    loginError.value = 'Google Client ID が設定されていません。';
+    return;
+  }
+  try {
+    await loadGoogleScript();
+    if (!window.google?.accounts?.id) throw new Error('Google Identity Servicesを初期化できませんでした。');
+    window.google.accounts.id.initialize({ client_id: googleClientId, callback: handleCredentialResponse });
+    if (googleButtonRef.value) {
+      window.google.accounts.id.renderButton(googleButtonRef.value, {
+        theme: 'outline',
+        size: 'large',
+        type: 'standard',
+        shape: 'pill'
+      });
+    }
+    window.google.accounts.id.prompt();
+    googleReady.value = true;
+    loginError.value = '';
+  } catch (err) {
+    loginError.value = (err as Error).message;
+  }
+}
+
+function promptGoogleLogin() {
+  if (!googleReady.value) {
+    initGoogle();
+    return;
+  }
+  window.google?.accounts?.id?.prompt();
+}
+
+async function handleCredentialResponse(response: any) {
+  if (!response?.credential) {
+    loginError.value = '認証情報を取得できませんでした。もう一度お試しください。';
+    return;
+  }
+  await loginWithIdToken(response.credential as string);
+}
 
 function formatClock(time: number | string | undefined) {
   if (!time) return '--:--:--';
@@ -406,10 +473,18 @@ function resultLabel(key: string) {
   }
 }
 
-async function loginUser() {
-  if (!login.idToken) return;
-  const res = await axios.post(`${apiBase}/api/login/google`, { idToken: login.idToken });
-  user.value = res.data.user as User;
+async function loginWithIdToken(idToken: string) {
+  if (!idToken) return;
+  isLoggingIn.value = true;
+  loginError.value = '';
+  try {
+    const res = await axios.post(`${apiBase}/api/login/google`, { idToken });
+    user.value = res.data.user as User;
+  } catch (err: any) {
+    loginError.value = err?.response?.data?.error ?? 'ログインに失敗しました。';
+  } finally {
+    isLoggingIn.value = false;
+  }
 }
 
 async function createSession() {
