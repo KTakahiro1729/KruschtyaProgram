@@ -56,7 +56,7 @@ import { ref, reactive } from 'vue';
 import ChatPaletteEditor from './components/ChatPaletteEditor.vue';
 import KPControls from './components/KPControls.vue';
 
-const apiBase = import.meta.env.VITE_WORKER_BASE ?? '/api';
+const apiBase = import.meta.env.VITE_WORKER_BASE ?? '';
 
 type User = { id: string; email: string; name: string; created_at: number };
 type Message = { id: string; created_at: number; raw_text: string; rendered_text: string };
