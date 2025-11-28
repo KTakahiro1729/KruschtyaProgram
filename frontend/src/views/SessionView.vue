@@ -18,7 +18,7 @@
       :display-name="displayName"
       :palette-items="palette"
       :kp-enabled="kpState.enabled"
-      :kp-password="kpState.password"
+      :kp-password-hash="kpPasswordHash"
       :kp-mode="kpState.mode"
       :kp-manual-time="kpState.manualTime"
       :kp-offset="kpState.offset"
@@ -53,6 +53,7 @@ const displayName = ref('');
 const messages = ref<MessageWithResult[]>([]);
 const palette = ref<PaletteItem[]>([]);
 const chatError = ref('');
+const kpPasswordHash = ref<string | null>(null);
 
 const kpState = reactive({
   enabled: false,
@@ -81,6 +82,7 @@ watch(
     sessionId.value = val as string;
     hydrateFromStorage();
     loadMessages();
+    loadSessionInfo();
   }
 );
 
@@ -104,6 +106,7 @@ watch(
 onMounted(() => {
   hydrateFromStorage();
   loadMessages();
+  loadSessionInfo();
   startClock();
 });
 
@@ -185,6 +188,18 @@ async function loadMessages() {
   messages.value = rawMessages.map((msg) => ({ ...msg, parsedResult: parseResult(msg.result_json) }));
 }
 
+async function loadSessionInfo() {
+  if (!sessionId.value) return;
+  kpPasswordHash.value = null;
+  try {
+    const res = await axios.get(`${apiBase}/api/sessions/${sessionId.value}/info`);
+    kpPasswordHash.value = res.data?.passwordHash ?? null;
+  } catch (err) {
+    console.error('Failed to load session info', err);
+    kpPasswordHash.value = null;
+  }
+}
+
 function parseResult(result: ApiMessage['result_json']): DiceResult | null {
   if (!result) return null;
   if (typeof result === 'string') {
@@ -203,8 +218,11 @@ function savePalette(val: PaletteItem[]) {
   if (sessionId.value) localStorage.setItem(`kp-palette-${sessionId.value}`, JSON.stringify(val));
 }
 
-function unlockKp() {
+function unlockKp(passwordInput: string) {
   if (!sessionId.value) return;
+  kpState.password = passwordInput;
+  localStorage.setItem(`kp-session-password-${sessionId.value}`, passwordInput);
+
   kpState.enabled = true;
   localStorage.setItem(`kp-enabled-${sessionId.value}`, 'true');
   chatText.value = '';
