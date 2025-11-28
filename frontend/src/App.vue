@@ -1,11 +1,6 @@
 <template>
-  <div class="app-shell">
-    <header class="app-header">
-      <div class="brand">Kruschtya Program</div>
-    </header>
-    <main class="app-main">
-      <RouterView />
-    </main>
+  <div class="min-h-screen bg-slate-900 text-slate-100">
+    <RouterView />
   </div>
 </template>
 

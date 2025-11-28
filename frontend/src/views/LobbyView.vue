@@ -1,51 +1,81 @@
 <template>
-  <div class="page">
-    <section class="panel hero">
-      <div>
-        <p class="eyebrow">クラウドで遊ぶダイス卓</p>
-        <h1>Cloudflare Dice Room</h1>
-        <p class="lede">
-          Googleでログインし、セッションを作成または参加してください。作成したセッションはロビーからすぐに入室できます。
-        </p>
-      </div>
-      <div class="panel compact">
-        <h2>ログイン</h2>
-        <p class="muted">Googleのポップアップから認証します。成功するとプロフィールが保持されます。</p>
-        <GoogleLogin :callback="onGoogleLogin" ux_mode="popup" type="standard" size="large" text="signin_with" />
-        <p v-if="user" class="status">ログイン済み: {{ user.name }} ({{ user.email }})</p>
-        <p v-if="loginError" class="error">{{ loginError }}</p>
-      </div>
-    </section>
-
-    <section class="grid">
-      <div class="panel">
-        <h2>セッション作成</h2>
-        <p class="muted">KPとして新しいセッションを立ち上げます。ログインしている必要があります。</p>
-        <button class="primary" :disabled="!user" @click="createSession">セッションを作成する</button>
-        <div v-if="session.sessionId" class="info">
-          <p>セッションID: {{ session.sessionId }}</p>
-          <p>パスワード: {{ session.password }}</p>
-          <p class="muted">セッション作成後はロビーの参加フォームから入室できます。</p>
+  <div class="min-h-[100dvh] bg-slate-900 px-4 py-8 text-slate-100">
+    <div class="mx-auto flex w-full max-w-5xl flex-col gap-6">
+      <header class="space-y-4 rounded-2xl border border-slate-800 bg-slate-800/60 p-6 shadow-xl shadow-black/30">
+        <div class="space-y-2">
+          <p class="text-[10px] uppercase tracking-[0.2em] text-indigo-300">クラウドで遊ぶダイス卓</p>
+          <h1 class="text-2xl font-semibold">Cloudflare Dice Room</h1>
+          <p class="text-sm text-slate-400">
+            Googleでログインし、セッションを作成または参加してください。作成したセッションはロビーからすぐに入室できます。
+          </p>
         </div>
-      </div>
-
-      <div class="panel">
-        <h2>セッション参加</h2>
-        <p class="muted">セッションIDと名前を入力し、入室します。参加後はプレイ画面へ移動します。</p>
-        <div class="form-grid">
-          <label>
-            <span>セッションID</span>
-            <input v-model="join.sessionId" placeholder="例: abc123" />
-          </label>
-          <label>
-            <span>名前</span>
-            <input v-model="join.name" placeholder="名前 (任意)" />
-          </label>
+        <div
+          class="flex flex-col gap-3 rounded-xl border border-slate-700 bg-slate-900/60 p-4 text-sm text-slate-300 md:flex-row md:items-center md:justify-between"
+        >
+          <div class="space-y-1">
+            <p class="text-xs text-slate-500">Googleログイン</p>
+            <p class="text-sm text-slate-400">ポップアップで認証します。成功するとプロフィールが保持されます。</p>
+          </div>
+          <div class="flex flex-col gap-2 md:w-72">
+            <GoogleLogin :callback="onGoogleLogin" ux_mode="popup" type="standard" size="large" text="signin_with" />
+            <p v-if="user" class="rounded border border-emerald-500/40 bg-emerald-900/30 px-3 py-2 text-xs text-emerald-100">
+              ログイン済み: {{ user.name }} ({{ user.email }})
+            </p>
+            <p v-if="loginError" class="text-xs text-rose-400">{{ loginError }}</p>
+          </div>
         </div>
-        <button class="primary" :disabled="!join.sessionId" @click="joinSession">参加する</button>
-        <p v-if="joinError" class="error">{{ joinError }}</p>
+      </header>
+
+      <div class="grid gap-4 md:grid-cols-2">
+        <section class="space-y-4 rounded-2xl border border-slate-800 bg-slate-800/60 p-6 shadow-lg shadow-black/20">
+          <h2 class="text-lg font-semibold">セッション作成</h2>
+          <p class="text-sm text-slate-400">KPとして新しいセッションを立ち上げます。ログインしている必要があります。</p>
+          <button
+            class="w-full rounded-lg bg-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-900/40 transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-slate-700"
+            :disabled="!user"
+            @click="createSession"
+          >
+            セッションを作成する
+          </button>
+          <div v-if="session.sessionId" class="space-y-2 rounded-lg border border-slate-700 bg-slate-900/40 p-4 text-sm">
+            <p>セッションID: <span class="font-mono">{{ session.sessionId }}</span></p>
+            <p>パスワード: <span class="font-mono">{{ session.password }}</span></p>
+            <p class="text-slate-400">セッション作成後は参加フォームから入室できます。</p>
+          </div>
+        </section>
+
+        <section class="space-y-4 rounded-2xl border border-slate-800 bg-slate-800/60 p-6 shadow-lg shadow-black/20">
+          <h2 class="text-lg font-semibold">セッション参加</h2>
+          <p class="text-sm text-slate-400">セッションIDと名前を入力し、入室します。参加後はプレイ画面へ移動します。</p>
+          <div class="grid gap-3 md:grid-cols-2">
+            <label class="space-y-1 text-sm text-slate-300">
+              <span class="text-xs text-slate-400">セッションID</span>
+              <input
+                v-model="join.sessionId"
+                class="w-full rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-sm text-white outline-none focus:border-indigo-400"
+                placeholder="例: abc123"
+              />
+            </label>
+            <label class="space-y-1 text-sm text-slate-300">
+              <span class="text-xs text-slate-400">名前</span>
+              <input
+                v-model="join.name"
+                class="w-full rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-sm text-white outline-none focus:border-indigo-400"
+                placeholder="名前 (任意)"
+              />
+            </label>
+          </div>
+          <button
+            class="w-full rounded-lg bg-emerald-600 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-900/40 transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-700"
+            :disabled="!join.sessionId"
+            @click="joinSession"
+          >
+            参加する
+          </button>
+          <p v-if="joinError" class="text-sm text-rose-400">{{ joinError }}</p>
+        </section>
       </div>
-    </section>
+    </div>
   </div>
 </template>
 
