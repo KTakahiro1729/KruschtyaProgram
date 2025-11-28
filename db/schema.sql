@@ -67,3 +67,10 @@ CREATE INDEX IF NOT EXISTS idx_session_tokens_session ON session_tokens(session_
 CREATE INDEX IF NOT EXISTS idx_participants_session ON participants(session_id);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON chat_messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_quantum_session_consumed ON quantum_numbers(session_id, consumed);
+
+-- Demo seed data
+INSERT OR IGNORE INTO users (id, email, name, created_at)
+VALUES ('system', 'system@localhost', 'System', strftime('%s', 'now'));
+
+INSERT OR IGNORE INTO sessions (id, owner_id, password, created_at, last_updated, mode, manual_time, current_time_offset)
+VALUES ('0000', 'system', 'demo', strftime('%s', 'now'), strftime('%s', 'now'), 'manual', NULL, 0);

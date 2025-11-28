@@ -6,14 +6,22 @@
         <h1>セッションID: {{ sessionId }}</h1>
         <p class="muted">参加情報とチャットを管理します。チャットは日本語コマンドにも対応しています。</p>
       </div>
-      <div class="panel compact" v-if="participant">
-        <h2>参加者</h2>
-        <p class="status">{{ participant.name }} として参加中</p>
-        <p class="muted">参加ID: {{ participant.participantId }}</p>
-      </div>
-      <div class="panel compact warning" v-else>
-        <h2>未参加</h2>
-        <p class="error">ロビーから再度参加してください。</p>
+      <div class="panel compact">
+        <h2>セッション参加</h2>
+        <p class="muted">このセッションに参加します。名前を入力して参加してください。</p>
+        <label>
+          <span>名前</span>
+          <input v-model="join.name" placeholder="名前 (任意)" />
+        </label>
+        <div class="actions">
+          <button class="primary" :disabled="isJoining" @click="joinSession">
+            {{ isJoining ? '参加中…' : '参加する' }}
+          </button>
+          <p v-if="joinError" class="error">{{ joinError }}</p>
+        </div>
+        <div v-if="participant" class="status">
+          {{ participant.name }} として参加中 (ID: {{ participant.participantId }})
+        </div>
       </div>
     </section>
 
@@ -75,6 +83,9 @@ const sessionId = ref<string | null>((route.params.id as string) ?? null);
 
 const participantRaw = sessionId.value ? localStorage.getItem(`kp-participant-${sessionId.value}`) : null;
 const participant = ref<{ participantId: string; name: string } | null>(participantRaw ? JSON.parse(participantRaw) : null);
+const join = reactive({ name: '' });
+const isJoining = ref(false);
+const joinError = ref('');
 
 type Message = { id: string; created_at: number; raw_text: string; rendered_text: string };
 type PaletteItem = { label: string; content: string };
@@ -94,6 +105,13 @@ watch(
       loadMessages();
       loadPalette();
     }
+  }
+);
+
+watch(
+  () => participant.value,
+  () => {
+    loadPalette();
   }
 );
 
@@ -136,7 +154,31 @@ async function loadPalette() {
   palette.value = (res.data.items ?? []) as PaletteItem[];
 }
 
-async function applyKP(payload: { password: string; mode?: string; manualTime?: number | null; offset?: number | null; confirmQuantum?: boolean }) {
+async function joinSession() {
+  if (!sessionId.value || isJoining.value) return;
+  joinError.value = '';
+  isJoining.value = true;
+  try {
+    const res = await axios.post(`${apiBase}/api/sessions/${sessionId.value}/join`, { name: join.name });
+    participant.value = {
+      participantId: res.data.participantId,
+      name: join.name || 'ゲスト'
+    };
+    localStorage.setItem(`kp-participant-${sessionId.value}`, JSON.stringify(participant.value));
+  } catch (err) {
+    joinError.value = (err as Error).message ?? '参加に失敗しました';
+  } finally {
+    isJoining.value = false;
+  }
+}
+
+async function applyKP(payload: {
+  password: string;
+  mode?: string;
+  manualTime?: number | null;
+  offset?: number | null;
+  confirmQuantum?: boolean;
+}) {
   if (!sessionId.value) return;
   await axios.post(`${apiBase}/api/sessions/${sessionId.value}/kp`, payload);
 }
