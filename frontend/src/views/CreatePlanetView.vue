@@ -90,6 +90,7 @@ async function createSession() {
     });
     session.sessionId = res.data.sessionId;
     session.password = res.data.password;
+    localStorage.setItem(`kp-session-password-${session.sessionId}`, session.password);
   } catch (err) {
     loginError.value = (err as Error).message ?? 'セッション作成に失敗しました';
   } finally {

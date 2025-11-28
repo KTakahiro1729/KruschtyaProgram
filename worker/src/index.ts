@@ -130,11 +130,6 @@ async function removeOldSessions(db: D1Database, ownerId: string) {
   const toRemove = ids.slice(0, ids.length - 9);
   for (const id of toRemove) {
     await db.prepare('DELETE FROM chat_messages WHERE session_id = ?').bind(id).run();
-    await db
-      .prepare('DELETE FROM chat_palettes WHERE participant_id IN (SELECT id FROM participants WHERE session_id = ?)')
-      .bind(id)
-      .run();
-    await db.prepare('DELETE FROM participants WHERE session_id = ?').bind(id).run();
     await db.prepare('DELETE FROM quantum_numbers WHERE session_id = ?').bind(id).run();
     await db.prepare('DELETE FROM session_tokens WHERE session_id = ?').bind(id).run();
     await db.prepare('DELETE FROM sessions WHERE id = ?').bind(id).run();
@@ -176,6 +171,16 @@ function parseDiceCommand(text: string) {
   return { type: 'chat' as const };
 }
 
+function ccResultLevel(value: number, target: number) {
+  if (value === 1) return 'critical';
+  const fumble = target < 50 ? value >= 96 : value === 100;
+  if (fumble) return 'fumble';
+  if (value <= Math.floor(target / 5)) return 'extreme';
+  if (value <= Math.floor(target / 2)) return 'hard';
+  if (value <= target) return 'regular';
+  return 'failure';
+}
+
 async function rollCC(rng: () => Promise<number>, bonus: number, target: number) {
   const tens: number[] = [];
   for (let i = 0; i < Math.abs(bonus) + 2; i++) {
@@ -184,8 +189,9 @@ async function rollCC(rng: () => Promise<number>, bonus: number, target: number)
   const one = tens[tens.length - 1];
   const dice = tens.map((t) => t * 10 + one).map((d) => (d === 0 ? 100 : d));
   const value = bonus < 0 ? Math.max(...dice) : Math.min(...dice);
-  const success = value <= target;
-  return { value, success, target, dice };
+  const result_level = ccResultLevel(value, target);
+  const success = ['critical', 'extreme', 'hard', 'regular'].includes(result_level);
+  return { value, success, target, dice, result_level };
 }
 
 async function rollDie(rng: () => Promise<number>, faces: number) {
@@ -210,7 +216,7 @@ async function getRng(db: D1Database, sessionId: string, mode: string, manualTim
   return async () => rng.rand(100) / 100;
 }
 
-async function handleMessage(db: D1Database, sessionId: string, participantId: string | null, raw: string) {
+async function handleMessage(db: D1Database, sessionId: string, speakerName: string | null, raw: string) {
   const session = await db
     .prepare('SELECT mode, manual_time, current_time_offset FROM sessions WHERE id = ?')
     .bind(sessionId)
@@ -234,10 +240,11 @@ async function handleMessage(db: D1Database, sessionId: string, participantId: s
   }
   const ts = nowMs();
   const id = uuid();
-  await db.prepare('INSERT INTO chat_messages (id, session_id, participant_id, raw_text, rendered_text, result_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .bind(id, sessionId, participantId, raw, rendered, result ? JSON.stringify(result) : null, ts)
+  await db
+    .prepare('INSERT INTO chat_messages (id, session_id, speaker_name, raw_text, rendered_text, result_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .bind(id, sessionId, speakerName ?? '名無しさん', raw, rendered, result ? JSON.stringify(result) : null, ts)
     .run();
-  return { id, rendered_text: rendered, created_at: ts, raw_text: raw };
+  return { id, rendered_text: rendered, created_at: ts, raw_text: raw, speaker_name: speakerName ?? '名無しさん' };
 }
 
 const loginSchema = z.object({ idToken: z.string().min(1, 'idToken is required') });
@@ -318,9 +325,9 @@ app.post('/api/sessions/:id/join', async (c) => {
 
 app.post('/api/sessions/:id/messages', async (c) => {
   const sessionId = c.req.param('id');
-  const { participantId, text } = await c.req.json();
+  const { speakerName, text } = await c.req.json();
   if (!text) return c.json({ error: 'Missing text' }, 400);
-  const message = await handleMessage(c.env.DB, sessionId, participantId ?? null, text);
+  const message = await handleMessage(c.env.DB, sessionId, speakerName ?? '名無しさん', text);
   return c.json({ message });
 });
 

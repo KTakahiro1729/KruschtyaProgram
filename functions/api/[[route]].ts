@@ -172,6 +172,16 @@ function parseDiceCommand(text: string) {
   return { type: 'chat' as const };
 }
 
+function ccResultLevel(value: number, target: number) {
+  if (value === 1) return 'critical';
+  const fumble = target < 50 ? value >= 96 : value === 100;
+  if (fumble) return 'fumble';
+  if (value <= Math.floor(target / 5)) return 'extreme';
+  if (value <= Math.floor(target / 2)) return 'hard';
+  if (value <= target) return 'regular';
+  return 'failure';
+}
+
 async function rollCC(rng: () => Promise<number>, bonus: number, target: number) {
   const tens: number[] = [];
   for (let i = 0; i < Math.abs(bonus) + 2; i++) {
@@ -180,8 +190,9 @@ async function rollCC(rng: () => Promise<number>, bonus: number, target: number)
   const one = tens[tens.length - 1];
   const dice = tens.map((t) => t * 10 + one).map((d) => (d === 0 ? 100 : d));
   const value = bonus < 0 ? Math.max(...dice) : Math.min(...dice);
-  const success = value <= target;
-  return { value, success, target, dice };
+  const result_level = ccResultLevel(value, target);
+  const success = ['critical', 'extreme', 'hard', 'regular'].includes(result_level);
+  return { value, success, target, dice, result_level };
 }
 
 async function rollDie(rng: () => Promise<number>, faces: number) {
