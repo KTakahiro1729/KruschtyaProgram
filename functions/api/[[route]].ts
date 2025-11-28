@@ -206,7 +206,7 @@ async function getRng(db: D1Database, sessionId: string, mode: string, manualTim
       return fallback / 100;
     };
   }
-  const baseSeed = (manualTime ?? nowMs()) + (offset ?? 0);
+  const baseSeed = Math.floor((manualTime ?? nowMs()) / 1000) + (offset ?? 0);
   const rng = new RubyRandom(baseSeed);
   return async () => rng.rand(100) / 100;
 }

@@ -1,7 +1,7 @@
 <template>
-  <div class="card">
+  <div>
     <h3>KPモード</h3>
-    <div style="display: grid; gap: 8px; grid-template-columns: 1fr 1fr;">
+    <div class="form-grid">
       <label>パスワード<input v-model="form.password" type="password" /></label>
       <label>モード
         <select v-model="form.mode">
@@ -16,7 +16,7 @@
     <div style="margin-top: 8px;">
       <label><input type="checkbox" v-model="form.confirmQuantum" /> 量子乱数で判定する</label>
     </div>
-    <button style="margin-top: 8px;" @click="submit">適用</button>
+    <button class="primary" style="margin-top: 8px;" @click="submit">適用</button>
   </div>
 </template>
 
