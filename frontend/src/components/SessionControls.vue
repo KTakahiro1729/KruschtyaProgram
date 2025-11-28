@@ -93,7 +93,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { ref, watch } from 'vue';
 import { MessageSquare, Palette, Send, Settings, Unlock } from 'lucide-vue-next';
 
 type PaletteItem = { label: string; content: string };
@@ -105,7 +105,7 @@ const props = defineProps<{
   displayName: string;
   paletteItems: PaletteItem[];
   kpEnabled: boolean;
-  kpPassword?: string | null;
+  kpPasswordHash?: string | null;
   kpMode: string;
   kpManualTime: number | null;
   kpOffset: number;
@@ -118,7 +118,7 @@ const emit = defineEmits<{
   (e: 'refresh'): void;
   (e: 'save-palette', val: PaletteItem[]): void;
   (e: 'update:palette', val: PaletteItem[]): void;
-  (e: 'unlock-kp'): void;
+  (e: 'unlock-kp', password: string): void;
   (e: 'apply-kp', payload: KpPayload): void;
 }>();
 
@@ -131,6 +131,8 @@ const bulkText = ref('');
 const kpModeLocal = ref(props.kpMode || 'system');
 const manualTimeInput = ref(props.kpManualTime ? formatDatetime(props.kpManualTime) : '');
 const offsetInput = ref(props.kpOffset ?? 0);
+const unlockReady = ref(false);
+let lastHashCheckId = 0;
 
 watch(
   () => props.chatText,
@@ -180,11 +182,43 @@ watch(
   }
 );
 
-const unlockReady = computed(() => !!props.kpPassword && props.kpPassword === localChat.value.trim());
+watch(localChat, () => evaluateUnlock());
+watch(
+  () => props.kpPasswordHash,
+  () => evaluateUnlock()
+);
+
+async function evaluateUnlock() {
+  const text = localChat.value.trim();
+  const targetHash = props.kpPasswordHash;
+  if (!text || !targetHash) {
+    unlockReady.value = false;
+    return;
+  }
+  const checkId = ++lastHashCheckId;
+  try {
+    const hash = await hashText(text);
+    if (checkId !== lastHashCheckId) return;
+    unlockReady.value = hash === targetHash;
+  } catch (err) {
+    console.error('Failed to hash password input', err);
+    if (checkId === lastHashCheckId) {
+      unlockReady.value = false;
+    }
+  }
+}
+
+async function hashText(text: string) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(text);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+}
 
 function handleSend() {
   if (unlockReady.value) {
-    emit('unlock-kp');
+    emit('unlock-kp', localChat.value.trim());
     localChat.value = '';
     return;
   }

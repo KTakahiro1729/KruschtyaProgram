@@ -317,6 +317,19 @@ app.post('/api/sessions', async (c) => {
   return c.json({ sessionId, password });
 });
 
+app.get('/api/sessions/:id/info', async (c) => {
+  const sessionId = c.req.param('id');
+  const session = await c.env.DB.prepare('SELECT password FROM sessions WHERE id = ?').bind(sessionId).first<{ password: string }>();
+  if (!session) return c.json({ error: 'Session not found' }, 404);
+
+  const msgBuffer = new TextEncoder().encode(session.password);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+
+  return c.json({ passwordHash: hashHex });
+});
+
 app.post('/api/sessions/:id/messages', async (c) => {
   const sessionId = c.req.param('id');
   const { speakerName, text } = await c.req.json();
