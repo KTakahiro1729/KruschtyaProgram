@@ -29,9 +29,10 @@
           <p>パスワード: {{ session.password }}</p>
           <p class="muted">参加者にはセッションURLを共有してください。</p>
         <div style="margin-top: 12px;">
-        <RouterLink :to="`/session/${session.sessionId}`" custom v-slot="{ navigate }">
-          <button class="primary" @click="navigate">セッションに入室する</button>
-        </RouterLink>
+          <RouterLink :to="`/session/${session.sessionId}`" custom v-slot="{ navigate }">
+            <button class="primary" @click="navigate">セッションに入室する</button>
+          </RouterLink>
+          </div>
         </div>
       </div>
     </section>
