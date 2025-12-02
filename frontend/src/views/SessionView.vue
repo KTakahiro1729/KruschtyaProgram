@@ -3,24 +3,19 @@
     <header
       class="h-10 flex items-center justify-between px-4 border-b border-slate-800 bg-slate-900/80 backdrop-blur-md sticky top-0 z-20"
     >
-      <div
-        class="font-mono text-lg font-semibold tracking-widest"
-        :class="kpState.paused ? 'text-rose-400 animate-pulse' : 'text-emerald-300'"
-      >
-        {{ clockText }}
+      <div class="flex items-center gap-2 text-[11px] uppercase tracking-[0.16em] text-slate-400">
+        <span class="font-semibold text-slate-200">Kruschtya Session</span>
+        <span class="font-mono text-slate-500">#{{ sessionId }}</span>
       </div>
-      <button
-        v-if="kpState.enabled"
-        type="button"
-        class="inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-semibold transition"
-        :class="kpState.paused
-          ? 'border-rose-400/60 bg-rose-900/40 text-rose-100 hover:bg-rose-800/60'
-          : 'border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700'"
-        @click="togglePause"
-      >
-        <component :is="kpState.paused ? Play : Pause" class="h-4 w-4" />
-        <span>{{ kpState.paused ? '再開' : '一時停止' }}</span>
-      </button>
+      <div class="flex items-center gap-2 text-[11px] font-semibold">
+        <span class="rounded border border-slate-700 px-2 py-0.5 text-slate-300">{{ kpState.mode === 'quantum' ? 'QUANTUM' : 'SYSTEM' }}</span>
+        <span
+          class="rounded-full px-2 py-0.5 text-[10px] font-bold"
+          :class="kpRunning ? 'bg-emerald-900/40 text-emerald-200 border border-emerald-500/50' : 'bg-rose-900/40 text-rose-200 border border-rose-500/50'"
+        >
+          {{ kpRunning ? 'RUNNING' : 'PAUSED' }}
+        </span>
+      </div>
     </header>
 
     <main ref="logRef" class="flex-1 overflow-y-auto px-3 py-2 space-y-1 bg-slate-900/60">
@@ -31,22 +26,52 @@
       >
         <div class="flex items-baseline gap-2 text-[11px] leading-tight text-slate-500">
           <span class="font-mono">{{ formatLogTime(msg.created_at) }}</span>
+          <button
+            v-if="kpState.enabled"
+            type="button"
+            class="inline-flex items-center rounded-full border border-slate-700 bg-slate-800/60 px-1.5 py-0.5 text-[10px] text-slate-300 transition hover:border-amber-400 hover:text-amber-200"
+            @click="applyLogTimestamp(msg.created_at)"
+          >
+            <Clock3 class="h-3 w-3" />
+          </button>
           <span :class="speakerClass(msg)">{{ msg.speaker_name || '名無しさん' }}</span>
         </div>
-        <div class="mt-1 text-sm leading-tight whitespace-pre-wrap break-words text-slate-100">
+        <div class="mt-1 flex items-start justify-between gap-3 text-sm leading-tight text-slate-100">
+          <span class="flex-1 whitespace-pre-wrap break-words">{{ msg.rendered_text || msg.raw_text }}</span>
           <span
             v-if="diceBadge(msg)"
-            class="mr-2 inline-flex items-center gap-2 rounded border px-2 py-0.5 text-[11px] font-mono"
+            class="inline-flex min-w-[120px] items-center justify-end gap-2 rounded border px-2 py-0.5 text-[11px] font-mono"
             :class="badgeTone(msg)"
           >
             {{ diceBadge(msg) }}
           </span>
-          <span>{{ msg.rendered_text || msg.raw_text }}</span>
         </div>
       </section>
     </main>
 
-    <footer class="bg-slate-800/90 border-t border-slate-700 flex flex-col h-64 shadow-[0_-10px_30px_rgba(0,0,0,0.35)]">
+    <footer class="bg-slate-800/90 border-t border-slate-700 flex flex-col h-72 shadow-[0_-10px_30px_rgba(0,0,0,0.35)]">
+      <div class="flex items-center justify-between border-b border-slate-700 px-4 py-2 text-xs">
+        <div class="flex items-center gap-2 text-slate-400">
+          <span class="font-semibold tracking-[0.14em] text-slate-300">GAME TIME</span>
+        </div>
+        <div class="flex items-center gap-3">
+          <span
+            class="font-mono text-sm"
+            :class="kpRunning ? 'text-emerald-200' : 'text-rose-200'"
+          >
+            {{ gameClockText }}
+          </span>
+          <button
+            v-if="kpState.enabled"
+            type="button"
+            class="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-1 text-[11px] font-semibold text-slate-200 transition hover:border-amber-400 hover:text-amber-100"
+            @click="togglePause"
+          >
+            <component :is="kpRunning ? Pause : Play" class="h-4 w-4" />
+            <span>{{ kpRunning ? '一時停止' : '再開' }}</span>
+          </button>
+        </div>
+      </div>
       <div class="flex border-b border-slate-700 text-xs font-semibold">
         <button
           class="flex items-center gap-2 px-5 py-2 transition"
@@ -158,63 +183,90 @@
           </div>
         </div>
 
-        <div v-show="activeTab === 'kp'" class="flex h-full flex-col gap-4 text-sm text-slate-100">
-          <div class="space-y-2">
-            <p class="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">RNG Mode</p>
-            <div class="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                class="rounded border px-3 py-2 text-center text-xs font-semibold transition"
-                :class="kpState.mode === 'system' ? 'border-amber-400 bg-amber-900/30 text-amber-100' : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:bg-slate-800'"
-                @click="applyKp({ mode: 'system', manualTime: null, offset: kpState.offset })"
-              >
-                現在時刻
-              </button>
-              <button
-                type="button"
-                class="rounded border px-3 py-2 text-center text-xs font-semibold transition"
-                :class="kpState.mode === 'manual' ? 'border-amber-400 bg-amber-900/30 text-amber-100' : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:bg-slate-800'"
-                @click="applyKp({ mode: 'manual', manualTime: manualTimeInput ? new Date(manualTimeInput).getTime() : Date.now(), offset: kpState.offset })"
-              >
-                手動
-              </button>
-              <button
-                type="button"
-                class="rounded border px-3 py-2 text-center text-xs font-semibold transition"
-                :class="kpState.mode === 'quantum' ? 'border-purple-400 bg-purple-900/30 text-purple-100' : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:bg-slate-800'"
-                @click="applyKp({ mode: 'quantum', manualTime: null, offset: kpState.offset })"
-              >
-                量子乱数
-              </button>
+        <div v-show="activeTab === 'kp'" class="h-full space-y-4 text-sm text-slate-100">
+          <div class="grid h-full grid-cols-1 gap-4 md:grid-cols-2">
+            <div class="flex flex-col gap-3 rounded-lg border border-slate-700 bg-slate-900/60 p-4">
+              <p class="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">RNG MODE</p>
+              <div class="space-y-2">
+                <label
+                  class="flex cursor-pointer items-center justify-between rounded-lg border px-3 py-2 transition"
+                  :class="kpState.mode === 'system'
+                    ? 'border-emerald-400/60 bg-emerald-900/20 text-emerald-100'
+                    : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-emerald-300/60'"
+                >
+                  <div class="flex items-center gap-2 text-xs font-semibold">
+                    <Shuffle class="h-4 w-4" />
+                    <span>System (Time-based)</span>
+                  </div>
+                  <input
+                    v-model="kpState.mode"
+                    type="radio"
+                    value="system"
+                    class="h-4 w-4 accent-emerald-400"
+                    @change="applyKp({ mode: 'system' })"
+                  />
+                </label>
+                <label
+                  class="flex cursor-pointer items-center justify-between rounded-lg border px-3 py-2 transition"
+                  :class="kpState.mode === 'quantum'
+                    ? 'border-purple-400/60 bg-purple-900/20 text-purple-100'
+                    : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-purple-300/60'"
+                >
+                  <div class="flex items-center gap-2 text-xs font-semibold">
+                    <Crown class="h-4 w-4" />
+                    <span>Quantum</span>
+                  </div>
+                  <input
+                    v-model="kpState.mode"
+                    type="radio"
+                    value="quantum"
+                    class="h-4 w-4 accent-purple-400"
+                    @change="applyKp({ mode: 'quantum' })"
+                  />
+                </label>
+              </div>
+              <p class="text-[11px] leading-relaxed text-slate-400">
+                "System" はゲーム内時間の秒をシードにした決定論的な乱数を使用します。Quantum モードを選ぶと外部量子乱数を利用します。
+              </p>
+            </div>
+
+            <div class="flex flex-col gap-3 rounded-lg border border-slate-700 bg-slate-900/60 p-4">
+              <p class="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">TIME CONTROL</p>
+              <div class="rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">
+                <div class="flex items-center justify-between">
+                  <span class="text-slate-400">Shared Stopwatch</span>
+                  <span class="font-mono text-sm" :class="kpRunning ? 'text-emerald-200' : 'text-rose-200'">{{ gameClockText }}</span>
+                </div>
+                <p class="mt-1 text-[11px] text-slate-500">全プレイヤー共通のゲーム時間です。必要に応じて一時停止や任意時刻の設定ができます。</p>
+              </div>
+              <div class="space-y-1">
+                <label class="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">Set Manual Time</label>
+                <input
+                  v-model="manualTimeInput"
+                  type="datetime-local"
+                  step="1"
+                  class="w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none focus:border-amber-400"
+                />
+                <p class="text-[11px] text-slate-500">設定するとその時刻で一時停止します。</p>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  class="flex-1 min-w-[140px] rounded-lg border border-amber-500 bg-amber-800 px-4 py-2 text-xs font-semibold text-amber-50 shadow-lg shadow-amber-900/30 transition hover:bg-amber-700"
+                  @click="applyManualTime()"
+                >
+                  時計を合わせる
+                </button>
+                <button
+                  type="button"
+                  class="flex-1 min-w-[140px] rounded-lg border border-emerald-500 bg-emerald-800 px-4 py-2 text-xs font-semibold text-emerald-50 shadow-lg shadow-emerald-900/30 transition hover:bg-emerald-700"
+                  @click="togglePause"
+                >
+                  {{ kpRunning ? '一時停止' : '再開' }}
+                </button>
+              </div>
             </div>
           </div>
-
-          <div class="space-y-2">
-            <p class="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">Manual Time</p>
-            <input
-              v-model="manualTimeInput"
-              type="datetime-local"
-              step="1"
-              class="w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none focus:border-amber-400"
-            />
-          </div>
-
-          <div class="space-y-2">
-            <p class="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">Offset (ms)</p>
-            <input
-              v-model.number="kpState.offset"
-              type="number"
-              class="w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none focus:border-amber-400"
-            />
-          </div>
-
-          <button
-            type="button"
-            class="mt-auto w-full rounded-lg bg-amber-700 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-amber-900/40 transition hover:bg-amber-600"
-            @click="applyKp({ mode: kpState.mode, manualTime: manualTimeInput ? new Date(manualTimeInput).getTime() : null, offset: kpState.offset })"
-          >
-            設定を適用
-          </button>
         </div>
       </div>
       <p v-if="chatError" class="px-4 pb-2 text-xs text-rose-400">{{ chatError }}</p>
@@ -226,7 +278,7 @@
 import axios from 'axios';
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import { Crown, List, MessageSquare, Pause, Play, Send, Unlock } from 'lucide-vue-next';
+import { Clock3, Crown, List, MessageSquare, Pause, Play, Send, Shuffle, Unlock } from 'lucide-vue-next';
 
 const apiBase = import.meta.env.VITE_WORKER_BASE ?? '';
 const route = useRoute();
@@ -250,10 +302,8 @@ const kpState = reactive({
   enabled: false,
   password: '',
   mode: 'system',
-  manualTime: null as number | null,
-  offset: 0,
-  paused: false,
-  pausedAt: null as number | null
+  gameTimeElapsed: 0,
+  lastResumedAt: null as number | null
 });
 
 const clockNow = ref(Date.now());
@@ -261,12 +311,13 @@ let timer: number | null = null;
 let lastHashCheckId = 0;
 
 const effectiveName = computed(() => displayName.value.trim() || '名無しさん');
-const displayClockValue = computed(() => {
-  if (kpState.paused && kpState.pausedAt) return kpState.pausedAt;
-  if (kpState.mode === 'manual' && kpState.manualTime) return kpState.manualTime + (kpState.offset ?? 0);
-  return clockNow.value + (kpState.offset ?? 0);
+const kpRunning = computed(() => kpState.lastResumedAt !== null);
+const gameClockValue = computed(() => {
+  const base = kpState.gameTimeElapsed ?? 0;
+  if (kpState.lastResumedAt === null) return base;
+  return base + (clockNow.value - kpState.lastResumedAt);
 });
-const clockText = computed(() => formatClock(displayClockValue.value));
+const gameClockText = computed(() => formatClock(gameClockValue.value));
 const paletteLines = computed(() => palette.value.map((p) => p.content));
 
 watch(
@@ -292,7 +343,7 @@ watch(
 );
 
 watch(
-  () => [kpState.enabled, kpState.mode, kpState.manualTime, kpState.offset],
+  () => [kpState.enabled, kpState.mode, kpState.password],
   () => persistKpState()
 );
 
@@ -331,7 +382,7 @@ type ApiMessage = {
 };
 type MessageWithResult = ApiMessage & { parsedResult: DiceResult | null };
 type PaletteItem = { label: string; content: string };
-type KpPayload = { mode: string; manualTime: number | null; offset: number };
+type KpPayload = { mode?: string; setTime?: number | null; action?: 'pause' | 'resume' };
 
 function startClock() {
   stopClock();
@@ -355,22 +406,13 @@ function hydrateFromStorage() {
   kpState.enabled = kpEnabled === 'true';
   kpState.password = localStorage.getItem(`kp-session-password-${sessionId.value}`) ?? '';
   kpState.mode = localStorage.getItem(`kp-mode-${sessionId.value}`) ?? 'system';
-  kpState.offset = Number(localStorage.getItem(`kp-offset-${sessionId.value}`) ?? 0);
-  const manualStored = localStorage.getItem(`kp-manual-${sessionId.value}`);
-  kpState.manualTime = manualStored ? Number(manualStored) : null;
-  manualTimeInput.value = kpState.manualTime ? formatDatetime(kpState.manualTime) : '';
+  manualTimeInput.value = '';
 }
 
 function persistKpState() {
   if (!sessionId.value) return;
   localStorage.setItem(`kp-enabled-${sessionId.value}`, kpState.enabled ? 'true' : 'false');
   localStorage.setItem(`kp-mode-${sessionId.value}`, kpState.mode);
-  localStorage.setItem(`kp-offset-${sessionId.value}`, `${kpState.offset ?? 0}`);
-  if (kpState.manualTime !== null) {
-    localStorage.setItem(`kp-manual-${sessionId.value}`, `${kpState.manualTime}`);
-  } else {
-    localStorage.removeItem(`kp-manual-${sessionId.value}`);
-  }
 }
 
 async function sendChat(text: string) {
@@ -401,6 +443,9 @@ async function loadSessionInfo() {
   try {
     const res = await axios.get(`${apiBase}/api/sessions/${sessionId.value}/info`);
     kpPasswordHash.value = res.data?.passwordHash ?? null;
+    if (res.data?.state) {
+      syncStateFromServer(res.data.state);
+    }
   } catch (err) {
     console.error('Failed to load session info', err);
     kpPasswordHash.value = null;
@@ -420,6 +465,21 @@ function parseResult(result: ApiMessage['result_json']): DiceResult | null {
   return result as DiceResult;
 }
 
+function syncStateFromServer(state: Partial<{ mode: string; game_time_elapsed: number; last_resumed_at: number | null; gameTime: number }>) {
+  if (state.mode) {
+    kpState.mode = state.mode;
+  }
+  if (typeof state.game_time_elapsed === 'number') {
+    kpState.gameTimeElapsed = state.game_time_elapsed;
+  }
+  if ('last_resumed_at' in state) {
+    kpState.lastResumedAt = state.last_resumed_at ?? null;
+  }
+  if (kpState.lastResumedAt === null && typeof state.gameTime === 'number') {
+    manualTimeInput.value = formatDatetime(state.gameTime);
+  }
+}
+
 function savePalette(val: PaletteItem[]) {
   palette.value = val;
   if (sessionId.value) localStorage.setItem(`kp-palette-${sessionId.value}`, JSON.stringify(val));
@@ -434,7 +494,7 @@ function unlockKp(passwordInput: string) {
   chatText.value = '';
 }
 
-async function applyKp(payload: KpPayload, options?: { maintainPause?: boolean }) {
+async function applyKp(payload: KpPayload) {
   if (!sessionId.value) return;
   if (!kpState.password) {
     chatError.value = 'KPパスワードを設定してください。';
@@ -442,20 +502,17 @@ async function applyKp(payload: KpPayload, options?: { maintainPause?: boolean }
   }
   chatError.value = '';
   try {
-    await axios.post(`${apiBase}/api/sessions/${sessionId.value}/kp`, {
+    const res = await axios.post(`${apiBase}/api/sessions/${sessionId.value}/kp`, {
       password: kpState.password,
-      mode: payload.mode,
-      manualTime: payload.manualTime,
-      offset: payload.offset,
-      confirmQuantum: payload.mode === 'quantum'
+      mode: payload.mode ?? kpState.mode,
+      setTime: payload.setTime ?? null,
+      action: payload.action,
+      confirmQuantum: (payload.mode ?? kpState.mode) === 'quantum'
     });
-    kpState.mode = payload.mode;
-    kpState.manualTime = payload.manualTime;
-    kpState.offset = payload.offset;
-    manualTimeInput.value = payload.manualTime ? formatDatetime(payload.manualTime) : '';
-    if (!options?.maintainPause) {
-      kpState.paused = false;
-      kpState.pausedAt = null;
+    if (res.data?.state) {
+      syncStateFromServer(res.data.state);
+    } else if (payload.mode) {
+      kpState.mode = payload.mode;
     }
     persistKpState();
   } catch (err) {
@@ -463,10 +520,28 @@ async function applyKp(payload: KpPayload, options?: { maintainPause?: boolean }
   }
 }
 
+function applyManualTime() {
+  if (!manualTimeInput.value) {
+    chatError.value = '設定する時刻を入力してください。';
+    return;
+  }
+  const ts = new Date(manualTimeInput.value).getTime();
+  if (Number.isNaN(ts)) {
+    chatError.value = '時刻の形式が正しくありません。';
+    return;
+  }
+  applyKp({ mode: kpState.mode, setTime: ts, action: 'pause' });
+}
+
+function applyLogTimestamp(epoch: number) {
+  manualTimeInput.value = formatDatetime(epoch);
+  applyKp({ mode: kpState.mode, setTime: epoch, action: 'pause' });
+}
+
 function formatClock(epoch: number) {
   const d = new Date(epoch);
   const pad = (n: number) => `${n}`.padStart(2, '0');
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 async function togglePause() {
@@ -475,19 +550,8 @@ async function togglePause() {
     chatError.value = 'KPパスワードを設定してください。';
     return;
   }
-  if (kpState.paused) {
-    kpState.paused = false;
-    kpState.pausedAt = null;
-    kpState.mode = 'system';
-    kpState.manualTime = null;
-    kpState.offset = 0;
-    await applyKp({ mode: 'system', manualTime: null, offset: 0 });
-    return;
-  }
-  const freezeTime = displayClockValue.value;
-  kpState.paused = true;
-  kpState.pausedAt = freezeTime;
-  await applyKp({ mode: 'manual', manualTime: freezeTime, offset: kpState.offset }, { maintainPause: true });
+  const action: KpPayload['action'] = kpRunning.value ? 'pause' : 'resume';
+  await applyKp({ mode: kpState.mode, action });
 }
 
 function formatLogTime(epoch: number) {

@@ -12,9 +12,9 @@ CREATE TABLE IF NOT EXISTS sessions (
   password TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   last_updated INTEGER NOT NULL,
-  mode TEXT NOT NULL DEFAULT 'system', -- system|manual|quantum
-  manual_time INTEGER,
-  current_time_offset INTEGER DEFAULT 0,
+  mode TEXT NOT NULL DEFAULT 'system', -- system|quantum
+  game_time_elapsed INTEGER NOT NULL DEFAULT 0,
+  last_resumed_at INTEGER,
   FOREIGN KEY(owner_id) REFERENCES users(id)
 );
 
@@ -53,5 +53,5 @@ CREATE INDEX IF NOT EXISTS idx_quantum_session_consumed ON quantum_numbers(sessi
 INSERT OR IGNORE INTO users (id, email, name, created_at)
 VALUES ('system', 'system@localhost', 'System', strftime('%s', 'now'));
 
-INSERT OR IGNORE INTO sessions (id, owner_id, password, created_at, last_updated, mode, manual_time, current_time_offset)
-VALUES ('0000', 'system', 'demo', strftime('%s', 'now'), strftime('%s', 'now'), 'manual', NULL, 0);
+INSERT OR IGNORE INTO sessions (id, owner_id, password, created_at, last_updated, mode, game_time_elapsed, last_resumed_at)
+VALUES ('0000', 'system', 'demo', strftime('%s', 'now'), strftime('%s', 'now'), 'system', 0, NULL);
