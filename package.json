@@ -6,16 +6,20 @@
   "scripts": {
     "postinstall": "npm install --prefix frontend",
     "build": "npm run build --prefix frontend",
-    "pages:dev": "wrangler pages dev frontend --compatibility-date=2024-05-01"
+    "pages:dev": "wrangler pages dev frontend --compatibility-date=2024-05-01",
+    "test": "vitest"
   },
   "dependencies": {
     "@hono/zod-validator": "^0.2.1",
     "hono": "^4.4.7",
+    "jose": "^5.9.3",
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.3.2",
     "@cloudflare/workers-types": "^4.20240512.0",
     "typescript": "^5.4.5",
+    "vitest": "^1.6.0",
     "wrangler": "^3.58.0"
   }
 }
