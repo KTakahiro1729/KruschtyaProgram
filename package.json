@@ -6,7 +6,7 @@
   "scripts": {
     "postinstall": "npm install --prefix frontend",
     "build": "npm run build --prefix frontend",
-    "pages:dev": "wrangler pages dev frontend --compatibility-date=2024-05-01",
+    "dev": "wrangler dev",
     "test": "vitest"
   },
   "dependencies": {
