@@ -1,4 +1,4 @@
-name = "cf-dice-pages"
+name = "kruschtya-planet"
 compatibility_date = "2024-05-01"
 pages_build_output_dir = "./frontend/dist"
 pages_functions_dir = "./functions"
@@ -6,8 +6,3 @@ pages_functions_dir = "./functions"
 [vars]
 GOOGLE_CLIENT_ID = "465792064386-2g9rcesrhk2enbrlhg7ph4lrg106a75v.apps.googleusercontent.com"
 VITE_GOOGLE_CLIENT_ID = "465792064386-2g9rcesrhk2enbrlhg7ph4lrg106a75v.apps.googleusercontent.com"
-
-[[d1_databases]]
-binding = "DB"
-database_name = "dice-db"
-database_id = "5b309725-f389-4581-9e58-4b4131d963a1"
