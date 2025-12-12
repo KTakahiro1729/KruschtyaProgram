@@ -1,12 +1,14 @@
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import { cors } from 'hono/cors';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
-import type { PagesFunction } from '@cloudflare/workers-types';
+import { createClient, type SupabaseClient, type User } from '@supabase/supabase-js';
 
 export type Env = {
-  DB: D1Database;
-  GOOGLE_CLIENT_ID: string;
+  SUPABASE_URL: string;
+  SUPABASE_ANON_KEY: string;
+  SUPABASE_SERVICE_ROLE_KEY: string;
 };
 
 const Q_RANDOM_ENDPOINT = 'https://qrandom.io/api/integers?length=512&min=1&max=100';
@@ -92,6 +94,34 @@ app.use('*', cors());
 const nowMs = () => Date.now();
 const uuid = () => crypto.randomUUID();
 
+function createSupabaseClient(url: string, key: string, token?: string) {
+  const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+  return createClient(url, key, {
+    auth: { autoRefreshToken: false, persistSession: false },
+    global: { headers }
+  });
+}
+
+function createAdminClient(env: Env) {
+  return createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
+}
+
+function getBearerToken(req: Request) {
+  const authHeader = req.headers.get('Authorization') ?? req.headers.get('authorization');
+  if (!authHeader) return null;
+  const match = authHeader.match(/^Bearer\s+(.+)$/i);
+  return match ? match[1] : null;
+}
+
+async function getUserContext(c: Context<{ Bindings: Env }>) {
+  const token = getBearerToken(c.req.raw);
+  if (!token) return { response: c.json({ error: 'Unauthorized' }, 401) } as const;
+  const userClient = createSupabaseClient(c.env.SUPABASE_URL, c.env.SUPABASE_ANON_KEY, token);
+  const { data, error } = await userClient.auth.getUser();
+  if (error || !data.user) return { response: c.json({ error: 'Unauthorized' }, 401) } as const;
+  return { userClient, adminClient: createAdminClient(c.env), user: data.user } as const;
+}
+
 type SessionState = {
   mode: string;
   game_time_elapsed: number;
@@ -125,7 +155,7 @@ async function fetchQuantumNumbers(): Promise<number[] | null> {
     }
     return null;
   } catch (err) {
-    console.error('Quantum fetch failed', err);
+    console.error('Quantum fetch failed', (err as Error).message);
     return null;
   }
 }
@@ -134,86 +164,103 @@ function fallbackCryptoNumbers(count = 512): number[] {
   return Array.from({ length: count }, () => crypto.getRandomValues(new Uint32Array(1))[0] % 100 + 1);
 }
 
-async function ensureUser(db: D1Database, email: string, name: string) {
-  const existing = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first<Record<string, unknown>>();
-  if (existing) return existing;
-  const id = uuid();
-  const ts = nowMs();
-  await db.prepare('INSERT INTO users (id, email, name, created_at) VALUES (?, ?, ?, ?)').bind(id, email, name, ts).run();
-  return { id, email, name, created_at: ts };
+async function ensureUserRecord(client: SupabaseClient, user: User) {
+  const now = nowMs();
+  const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
+  const payload = {
+    id: user.id,
+    email: user.email ?? '',
+    name: (meta.name as string | undefined) ?? (meta.full_name as string | undefined) ?? user.email ?? 'Unknown',
+    created_at: now
+  };
+  const { error } = await client.from('users').upsert(payload, { onConflict: 'id' });
+  if (error) throw new Error('Failed to sync user');
+  return payload;
 }
 
-async function removeOldSessions(db: D1Database, ownerId: string) {
-  const rows = await db.prepare('SELECT id FROM sessions WHERE owner_id = ? ORDER BY created_at ASC').bind(ownerId).all();
-  const ids: string[] = rows.results?.map((r: { id: string }) => r.id) ?? [];
-  if (ids.length < 10) return;
-  const toRemove = ids.slice(0, ids.length - 9);
-  for (const id of toRemove) {
-    await db.prepare('DELETE FROM chat_messages WHERE session_id = ?').bind(id).run();
-    await db.prepare('DELETE FROM quantum_numbers WHERE session_id = ?').bind(id).run();
-    await db.prepare('DELETE FROM session_tokens WHERE session_id = ?').bind(id).run();
-    await db.prepare('DELETE FROM sessions WHERE id = ?').bind(id).run();
-  }
+async function removeOldSessions(client: SupabaseClient, adminClient: SupabaseClient, ownerId: string) {
+  const { data, error } = await client
+    .from('sessions')
+    .select('id')
+    .eq('owner_id', ownerId)
+    .order('created_at', { ascending: true });
+  if (error || !data) throw new Error('Failed to query sessions');
+  if (data.length < 10) return;
+  const toRemove = data.slice(0, data.length - 9).map((row) => row.id);
+  if (toRemove.length === 0) return;
+
+  await adminClient.from('chat_messages').delete().in('session_id', toRemove);
+  await adminClient.from('quantum_numbers').delete().in('session_id', toRemove);
+  await adminClient.from('sessions').delete().in('id', toRemove);
 }
 
-async function storeQuantumBatch(db: D1Database, sessionId: string, numbers: number[]) {
-  const ts = nowMs();
-  for (const num of numbers) {
-    await db.prepare('INSERT INTO quantum_numbers (session_id, value, consumed) VALUES (?, ?, 0)').bind(sessionId, num).run();
-  }
-  await db.prepare('UPDATE sessions SET last_updated = ? WHERE id = ?').bind(ts, sessionId).run();
+async function storeQuantumBatch(client: SupabaseClient, sessionId: string, numbers: number[]) {
+  const rows = numbers.map((value) => ({ session_id: sessionId, value, consumed: false }));
+  const { error } = await client.from('quantum_numbers').insert(rows);
+  if (error) throw new Error('Failed to store quantum numbers');
+  await client.from('sessions').update({ last_updated: nowMs() }).eq('id', sessionId);
 }
 
-async function nextQuantumNumber(db: D1Database, sessionId: string): Promise<number | null> {
-  const res = await db
-    .prepare(
-      'UPDATE quantum_numbers SET consumed = 1 WHERE id = (SELECT id FROM quantum_numbers WHERE session_id = ? AND consumed = 0 ORDER BY id ASC LIMIT 1) RETURNING value'
-    )
-    .bind(sessionId)
-    .first<Record<string, unknown>>();
-  if (!res || res.value === undefined || res.value === null) return null;
-  return Number(res.value);
+async function nextQuantumNumber(client: SupabaseClient, sessionId: string): Promise<number | null> {
+  const { data, error } = await client
+    .from('quantum_numbers')
+    .select('id, value')
+    .eq('session_id', sessionId)
+    .eq('consumed', false)
+    .order('id', { ascending: true })
+    .limit(1);
+  if (error) throw new Error('Failed to query quantum numbers');
+  const next = data?.[0];
+  if (!next) return null;
+  const { error: updateError } = await client.from('quantum_numbers').update({ consumed: true }).eq('id', next.id);
+  if (updateError) throw new Error('Failed to consume quantum number');
+  return Number(next.value);
 }
 
-async function getSessionState(db: D1Database, sessionId: string): Promise<SessionState | null> {
-  const row = await db
-    .prepare('SELECT mode, game_time_elapsed, last_resumed_at FROM sessions WHERE id = ?')
-    .bind(sessionId)
-    .first<Record<string, unknown>>();
-  if (!row) return null;
-  return normalizeSessionState(row);
+async function getSessionState(client: SupabaseClient, sessionId: string): Promise<SessionState | null> {
+  const { data, error } = await client
+    .from('sessions')
+    .select('mode, game_time_elapsed, last_resumed_at')
+    .eq('id', sessionId)
+    .maybeSingle();
+  if (error) throw new Error('Failed to fetch session state');
+  if (!data) return null;
+  return normalizeSessionState(data as Record<string, unknown>);
 }
 
-async function pauseSession(db: D1Database, sessionId: string, now = nowMs()) {
-  const state = await getSessionState(db, sessionId);
+async function pauseSession(client: SupabaseClient, sessionId: string, now = nowMs()) {
+  const state = await getSessionState(client, sessionId);
   if (!state) throw new Error('Session not found');
   if (state.last_resumed_at === null) return state;
   const updatedElapsed = state.game_time_elapsed + (now - state.last_resumed_at);
-  await db
-    .prepare('UPDATE sessions SET game_time_elapsed = ?, last_resumed_at = NULL, last_updated = ? WHERE id = ?')
-    .bind(updatedElapsed, now, sessionId)
-    .run();
+  const { error } = await client
+    .from('sessions')
+    .update({ game_time_elapsed: updatedElapsed, last_resumed_at: null, last_updated: now })
+    .eq('id', sessionId);
+  if (error) throw new Error('Failed to pause session');
   return { ...state, game_time_elapsed: updatedElapsed, last_resumed_at: null } satisfies SessionState;
 }
 
-async function resumeSession(db: D1Database, sessionId: string, now = nowMs()) {
-  const state = await getSessionState(db, sessionId);
+async function resumeSession(client: SupabaseClient, sessionId: string, now = nowMs()) {
+  const state = await getSessionState(client, sessionId);
   if (!state) throw new Error('Session not found');
   if (state.last_resumed_at !== null) return state;
-  await db
-    .prepare('UPDATE sessions SET last_resumed_at = ?, last_updated = ? WHERE id = ?')
-    .bind(now, now, sessionId)
-    .run();
+  const { error } = await client
+    .from('sessions')
+    .update({ last_resumed_at: now, last_updated: now })
+    .eq('id', sessionId);
+  if (error) throw new Error('Failed to resume session');
   return { ...state, last_resumed_at: now } satisfies SessionState;
 }
 
-async function setGameTime(db: D1Database, sessionId: string, gameTime: number, now = nowMs()) {
-  const state = await getSessionState(db, sessionId);
+async function setGameTime(client: SupabaseClient, sessionId: string, gameTime: number, now = nowMs()) {
+  const state = await getSessionState(client, sessionId);
   if (!state) throw new Error('Session not found');
-  await db
-    .prepare('UPDATE sessions SET game_time_elapsed = ?, last_resumed_at = NULL, last_updated = ? WHERE id = ?')
-    .bind(gameTime, now, sessionId)
-    .run();
+  const { error } = await client
+    .from('sessions')
+    .update({ game_time_elapsed: gameTime, last_resumed_at: null, last_updated: now })
+    .eq('id', sessionId);
+  if (error) throw new Error('Failed to set game time');
   return { ...state, game_time_elapsed: gameTime, last_resumed_at: null } satisfies SessionState;
 }
 
@@ -264,10 +311,10 @@ async function rollDie(rng: () => Promise<number>, faces: number) {
   return results;
 }
 
-async function getRng(db: D1Database, sessionId: string, mode: string, gameTimeMs: number) {
+async function getRng(client: SupabaseClient, sessionId: string, mode: string, gameTimeMs: number) {
   if (mode === 'quantum') {
     return async () => {
-      const q = await nextQuantumNumber(db, sessionId);
+      const q = await nextQuantumNumber(client, sessionId);
       if (q !== null) return (q % 100) / 100;
       const fallback = crypto.getRandomValues(new Uint32Array(1))[0] % 100;
       return fallback / 100;
@@ -278,118 +325,112 @@ async function getRng(db: D1Database, sessionId: string, mode: string, gameTimeM
   return async () => rng.rand(100) / 100;
 }
 
-async function handleMessage(db: D1Database, sessionId: string, speakerName: string, raw: string) {
-  const session = await getSessionState(db, sessionId);
+async function handleMessage(
+  userClient: SupabaseClient,
+  adminClient: SupabaseClient,
+  sessionId: string,
+  speakerName: string,
+  raw: string
+) {
+  const session = await getSessionState(userClient, sessionId);
   if (!session) throw new Error('Session not found');
   const mode = session.mode;
   const gameTime = computeGameTime(session);
-  const rng = await getRng(db, sessionId, mode, gameTime);
+  const rng = await getRng(userClient, sessionId, mode, gameTime);
   const parsed = parseDiceCommand(raw.split(' ')[0]);
   let rendered = raw;
   let result: Record<string, unknown> | null = null;
+  let messageType: 'chat' | 'dice' = 'chat';
   if (parsed.type === 'cc') {
     const roll = await rollCC(rng, parsed.bonus, parsed.target);
     rendered = `CC<=${parsed.target} (${roll.value}) ${roll.success ? 'SUCCESS' : 'FAILURE'}`;
     result = roll;
+    messageType = 'dice';
   } else if (parsed.type === 'die') {
     const roll = await rollDie(rng, parsed.faces);
     rendered = `1d${parsed.faces}: ${roll.join(', ')}`;
     result = { rolls: roll };
+    messageType = 'dice';
   }
   const ts = nowMs();
   const id = uuid();
-  await db
-    .prepare('INSERT INTO chat_messages (id, session_id, speaker_name, raw_text, rendered_text, result_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .bind(id, sessionId, speakerName || '名無しさん', raw, rendered, result ? JSON.stringify(result) : null, ts)
-    .run();
+  const { error } = await adminClient.from('chat_messages').insert({
+    id,
+    session_id: sessionId,
+    speaker_name: speakerName || '名無しさん',
+    raw_text: raw,
+    rendered_text: rendered,
+    result_json: result ? JSON.stringify(result) : null,
+    created_at: ts,
+    type: messageType
+  });
+  if (error) throw new Error('Failed to store message');
   return { id, rendered_text: rendered, created_at: ts, raw_text: raw, speaker_name: speakerName || '名無しさん' };
 }
 
-const loginSchema = z.object({ idToken: z.string().min(1, 'idToken is required') });
-
-type TokenInfo = {
-  aud: string;
-  exp: string;
-  email?: string;
-  name?: string;
-  iss?: string;
-};
-
-async function verifyIdToken(idToken: string, clientId: string): Promise<TokenInfo> {
-  const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`);
-  if (!res.ok) {
-    throw new Error('Invalid id_token');
-  }
-  const payload = (await res.json()) as TokenInfo;
-  const expMs = Number(payload.exp) * 1000;
-  const validIssuers = ['accounts.google.com', 'https://accounts.google.com'];
-  if (payload.aud !== clientId) {
-    throw new Error('Client ID mismatch');
-  }
-  if (!payload.iss || !validIssuers.includes(payload.iss)) {
-    throw new Error('Issuer mismatch');
-  }
-  if (!expMs || expMs < Date.now()) {
-    throw new Error('Token expired');
-  }
-  if (!payload.email) {
-    throw new Error('Email missing in token');
-  }
-  return payload;
-}
-
-app.post('/api/login/google', zValidator('json', loginSchema), async (c) => {
-  const { idToken } = c.req.valid('json');
-  if (!c.env.GOOGLE_CLIENT_ID) {
-    return c.json({ error: 'Server misconfiguration' }, 500);
-  }
-  try {
-    const payload = await verifyIdToken(idToken, c.env.GOOGLE_CLIENT_ID);
-    const name = payload.name ?? payload.email ?? 'Unknown';
-    const user = await ensureUser(c.env.DB, payload.email!, name);
-    return c.json({ user });
-  } catch (err) {
-    return c.json({ error: (err as Error).message }, 401);
-  }
+const createSessionSchema = z.object({});
+const messageSchema = z.object({ speakerName: z.string().optional(), text: z.string().min(1, 'text is required') });
+const kpSchema = z.object({
+  password: z.string().min(1),
+  mode: z.string().optional(),
+  setTime: z.number().optional(),
+  action: z.enum(['pause', 'resume']).optional(),
+  confirmQuantum: z.boolean().optional()
 });
 
-app.post('/api/sessions', async (c) => {
-  const { ownerEmail, ownerName } = await c.req.json();
-  if (!ownerEmail || !ownerName) return c.json({ error: 'Missing owner info' }, 400);
-  const user = await ensureUser(c.env.DB, ownerEmail, ownerName);
-  await removeOldSessions(c.env.DB, user.id);
+app.post('/api/sessions', zValidator('json', createSessionSchema), async (c) => {
+  const auth = await getUserContext(c);
+  if ('response' in auth) return auth.response;
+  const { userClient, adminClient, user } = auth;
+
+  await ensureUserRecord(userClient, user);
+  await removeOldSessions(userClient, adminClient, user.id);
+
   const sessionId = uuid();
   const password = crypto.randomUUID().slice(0, 8);
   const ts = nowMs();
-  await c.env.DB
-    .prepare(
-      'INSERT INTO sessions (id, owner_id, password, created_at, last_updated, mode, game_time_elapsed, last_resumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    )
-    .bind(sessionId, user.id, password, ts, ts, 'system', 0, ts)
-    .run();
-  await c.env.DB
-    .prepare('INSERT INTO session_tokens (id, session_id, password, created_at) VALUES (?, ?, ?, ?)')
-    .bind(uuid(), sessionId, password, ts)
-    .run();
+
+  const { error } = await userClient.from('sessions').insert({
+    id: sessionId,
+    owner_id: user.id,
+    password,
+    created_at: ts,
+    last_updated: ts,
+    mode: 'system',
+    game_time_elapsed: 0,
+    last_resumed_at: ts
+  });
+  if (error) return c.json({ error: 'Failed to create session' }, 500);
+
   const quantum = (await fetchQuantumNumbers()) ?? fallbackCryptoNumbers();
-  await storeQuantumBatch(c.env.DB, sessionId, quantum);
+  try {
+    await storeQuantumBatch(userClient, sessionId, quantum);
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 500);
+  }
+
   return c.json({ sessionId, password });
 });
 
 app.get('/api/sessions/:id/info', async (c) => {
+  const auth = await getUserContext(c);
+  if ('response' in auth) return auth.response;
+  const { userClient } = auth;
   const sessionId = c.req.param('id');
-  const session = await c.env.DB
-    .prepare('SELECT password, mode, game_time_elapsed, last_resumed_at FROM sessions WHERE id = ?')
-    .bind(sessionId)
-    .first<Record<string, unknown>>();
-  if (!session || typeof session.password !== 'string') return c.json({ error: 'Session not found' }, 404);
+  const { data, error } = await userClient
+    .from('sessions')
+    .select('password, mode, game_time_elapsed, last_resumed_at')
+    .eq('id', sessionId)
+    .maybeSingle();
+  if (error) return c.json({ error: 'Session lookup failed' }, 500);
+  if (!data || typeof data.password !== 'string') return c.json({ error: 'Session not found' }, 404);
 
-  const msgBuffer = new TextEncoder().encode(session.password);
+  const msgBuffer = new TextEncoder().encode(data.password);
   const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
 
-  const state = normalizeSessionState(session);
+  const state = normalizeSessionState(data as Record<string, unknown>);
   const gameTime = computeGameTime(state);
 
   return c.json({
@@ -398,63 +439,77 @@ app.get('/api/sessions/:id/info', async (c) => {
   });
 });
 
-app.post('/api/sessions/:id/messages', async (c) => {
+app.post('/api/sessions/:id/messages', zValidator('json', messageSchema), async (c) => {
+  const auth = await getUserContext(c);
+  if ('response' in auth) return auth.response;
+  const { userClient, adminClient } = auth;
   const sessionId = c.req.param('id');
-  const { speakerName, text } = await c.req.json();
-  if (!text) return c.json({ error: 'Missing text' }, 400);
-  const message = await handleMessage(c.env.DB, sessionId, speakerName ?? '名無しさん', text);
-  return c.json({ message });
+  const { speakerName, text } = c.req.valid('json');
+  try {
+    const message = await handleMessage(userClient, adminClient, sessionId, speakerName ?? '名無しさん', text);
+    return c.json({ message });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
 });
 
-app.get('/api/sessions/:id/messages', async (c) => {
+app.post('/api/sessions/:id/kp', zValidator('json', kpSchema), async (c) => {
+  const auth = await getUserContext(c);
+  if ('response' in auth) return auth.response;
+  const { userClient } = auth;
   const sessionId = c.req.param('id');
-  const rows = await c.env.DB.prepare('SELECT * FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC').bind(sessionId).all();
-  return c.json({ messages: rows.results ?? [] });
-});
-
-app.post('/api/sessions/:id/kp', async (c) => {
-  const sessionId = c.req.param('id');
-  const { password, mode, setTime, action, confirmQuantum } = await c.req.json();
-  const session = await c.env.DB
-    .prepare('SELECT password FROM sessions WHERE id = ?')
-    .bind(sessionId)
-    .first<{ password: string }>();
-  if (!session) return c.json({ error: 'Session not found' }, 404);
-  if (session.password !== password) return c.json({ error: 'Forbidden' }, 403);
+  const { password, mode, setTime, action, confirmQuantum } = c.req.valid('json');
+  const { data, error } = await userClient.from('sessions').select('password').eq('id', sessionId).maybeSingle();
+  if (error) return c.json({ error: 'Session lookup failed' }, 500);
+  if (!data) return c.json({ error: 'Session not found' }, 404);
+  if (data.password !== password) return c.json({ error: 'Forbidden' }, 403);
   if (mode === 'quantum' && !confirmQuantum) {
     return c.json({ error: 'Quantum mode requires confirmation' }, 400);
   }
 
   const now = nowMs();
-  let state = await getSessionState(c.env.DB, sessionId);
+  let state = await getSessionState(userClient, sessionId);
   if (!state) return c.json({ error: 'Session not found' }, 404);
   const desiredMode = typeof mode === 'string' ? mode : state.mode;
 
-  if (typeof setTime === 'number' && !Number.isNaN(setTime)) {
-    state = await setGameTime(c.env.DB, sessionId, setTime, now);
+  try {
+    if (typeof setTime === 'number' && !Number.isNaN(setTime)) {
+      state = await setGameTime(userClient, sessionId, setTime, now);
+    }
+
+    if (action === 'pause') {
+      state = await pauseSession(userClient, sessionId, now);
+    } else if (action === 'resume') {
+      state = await resumeSession(userClient, sessionId, now);
+    }
+
+    const { error: updateError } = await userClient
+      .from('sessions')
+      .update({ mode: desiredMode ?? 'system', last_updated: now })
+      .eq('id', sessionId);
+    if (updateError) throw new Error('Failed to update session');
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 500);
   }
 
-  if (action === 'pause') {
-    state = await pauseSession(c.env.DB, sessionId, now);
-  } else if (action === 'resume') {
-    state = await resumeSession(c.env.DB, sessionId, now);
-  }
-
-  await c.env.DB
-    .prepare('UPDATE sessions SET mode = ?, last_updated = ? WHERE id = ?')
-    .bind(desiredMode ?? 'system', now, sessionId)
-    .run();
-
-  state = (await getSessionState(c.env.DB, sessionId)) ?? state;
+  state = (await getSessionState(userClient, sessionId)) ?? state;
   const gameTime = computeGameTime(state);
 
   return c.json({ ok: true, state: { ...state, mode: desiredMode, gameTime } });
 });
 
 app.get('/api/sessions/:id/logs', async (c) => {
+  const auth = await getUserContext(c);
+  if ('response' in auth) return auth.response;
+  const { userClient } = auth;
   const sessionId = c.req.param('id');
-  const rows = await c.env.DB.prepare('SELECT * FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC').bind(sessionId).all();
-  const payload = JSON.stringify(rows.results ?? [], null, 2);
+  const { data, error } = await userClient
+    .from('chat_messages')
+    .select('*')
+    .eq('session_id', sessionId)
+    .order('created_at', { ascending: true });
+  if (error) return c.json({ error: 'Failed to fetch logs' }, 500);
+  const payload = JSON.stringify(data ?? [], null, 2);
   return new Response(payload, {
     headers: {
       'Content-Type': 'application/json',
@@ -463,5 +518,6 @@ app.get('/api/sessions/:id/logs', async (c) => {
   });
 });
 
-export const onRequest: PagesFunction<Env> = async (context) => app.fetch(context.request, context.env, context);
+export const onRequest = async (context: { request: Request; env: Env; context: unknown }) =>
+  app.fetch(context.request, context.env, context);
 export { app };
