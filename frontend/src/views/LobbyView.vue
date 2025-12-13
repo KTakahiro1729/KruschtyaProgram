@@ -183,12 +183,7 @@ async function joinSession() {
   if (!join.sessionId) return;
   joinError.value = '';
   try {
-    const res = await axios.post(
-      `${apiBase}/api/sessions/${join.sessionId}/join`,
-      { name: join.name },
-      { headers: authHeaders() }
-    );
-    const participant: ParticipantInfo = { participantId: res.data.participantId, name: join.name || 'ゲスト' };
+    const participant: ParticipantInfo = { participantId: crypto.randomUUID(), name: join.name || 'ゲスト' };
     localStorage.setItem(`kp-participant-${join.sessionId}`, JSON.stringify(participant));
     await router.push({ name: 'session', params: { id: join.sessionId } });
   } catch (err) {

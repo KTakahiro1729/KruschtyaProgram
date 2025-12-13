@@ -370,6 +370,7 @@ watch(accessToken, (token) => {
   if (token && sessionId.value) {
     loadMessages();
     loadSessionInfo();
+    setupRealtime();
   }
 });
 
@@ -525,14 +526,16 @@ function isCommand(text: string) {
 
 async function loadMessages() {
   if (!sessionId.value) return;
-  if (!accessToken.value) {
-    chatError.value = 'メッセージを読み込むにはログインが必要です。';
+  const { data, error } = await supabase
+    .from('chat_messages')
+    .select('*')
+    .eq('session_id', sessionId.value)
+    .order('created_at', { ascending: true });
+  if (error) {
+    chatError.value = error.message ?? 'メッセージの取得に失敗しました';
     return;
   }
-  const res = await axios.get(`${apiBase}/api/sessions/${sessionId.value}/messages`, {
-    headers: { Authorization: `Bearer ${accessToken.value}` }
-  });
-  const rawMessages = (res.data.messages ?? []) as ApiMessage[];
+  const rawMessages = (data ?? []) as ApiMessage[];
   messages.value = rawMessages.map((msg) => normalizeMessage(msg));
 }
 
