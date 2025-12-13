@@ -528,6 +528,7 @@ function isCommand(text: string) {
 
 async function loadMessages() {
   if (!sessionId.value) return;
+  chatError.value = '';
   const { data, error } = await supabase
     .from('chat_messages')
     .select('*')
