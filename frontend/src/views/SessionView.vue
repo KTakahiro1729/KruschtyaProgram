@@ -335,7 +335,10 @@ watch(
   (val) => {
     sessionId.value = val as string;
     hydrateFromStorage();
-    setupRealtime();
+    cleanupRealtime();
+    if (accessToken.value) {
+      setupRealtime();
+    }
     loadMessages();
     loadSessionInfo();
   }
@@ -379,7 +382,6 @@ onMounted(() => {
   initializeAuth();
   loadMessages();
   loadSessionInfo();
-  setupRealtime();
   startClock();
 });
 
