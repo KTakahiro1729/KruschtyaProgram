@@ -116,11 +116,17 @@ function getBearerToken(req: Request) {
 
 async function getUserContext(c: Context<{ Bindings: Env }>) {
   const token = getBearerToken(c.req.raw);
-  if (!token) return { response: c.json({ error: 'Unauthorized' }, 401) } as const;
+  const adminClient = createAdminClient(c.env);
+
+  if (!token) {
+    const userClient = createSupabaseClient(c.env.SUPABASE_URL, c.env.SUPABASE_ANON_KEY);
+    return { userClient, adminClient, user: null as User | null } as const;
+  }
+
   const userClient = createSupabaseClient(c.env.SUPABASE_URL, c.env.SUPABASE_ANON_KEY, token);
   const { data, error } = await userClient.auth.getUser();
   if (error || !data.user) return { response: c.json({ error: 'Unauthorized' }, 401) } as const;
-  return { userClient, adminClient: createAdminClient(c.env), user: data.user } as const;
+  return { userClient, adminClient, user: data.user } as const;
 }
 
 type SessionState = {
@@ -343,7 +349,7 @@ async function handleMessage(
   speakerName: string,
   raw: string
 ) {
-  const session = await getSessionState(userClient, sessionId);
+  const session = await getSessionState(adminClient, sessionId);
   if (!session) throw new Error('Session not found');
   const mode = session.mode;
   const gameTime = computeGameTime(session);
@@ -365,7 +371,7 @@ async function handleMessage(
   }
   const ts = nowMs();
   const id = uuid();
-  const { error } = await adminClient.from('chat_messages').insert({
+  const { error } = await userClient.from('chat_messages').insert({
     id,
     session_id: sessionId,
     speaker_name: speakerName || '名無しさん',
@@ -424,11 +430,9 @@ app.post('/api/sessions', zValidator('json', createSessionSchema), async (c) => 
 });
 
 app.get('/api/sessions/:id/info', async (c) => {
-  const auth = await getUserContext(c);
-  if ('response' in auth) return auth.response;
-  const { userClient } = auth;
+  const { adminClient } = await getUserContext(c);
   const sessionId = c.req.param('id');
-  const { data, error } = await userClient
+  const { data, error } = await adminClient
     .from('sessions')
     .select('password, mode, game_time_elapsed, last_resumed_at')
     .eq('id', sessionId)
@@ -467,10 +471,10 @@ app.post('/api/sessions/:id/messages', zValidator('json', messageSchema), async 
 app.post('/api/sessions/:id/kp', zValidator('json', kpSchema), async (c) => {
   const auth = await getUserContext(c);
   if ('response' in auth) return auth.response;
-  const { userClient } = auth;
+  const { adminClient } = auth;
   const sessionId = c.req.param('id');
   const { password, mode, setTime, action, confirmQuantum } = c.req.valid('json');
-  const { data, error } = await userClient.from('sessions').select('password').eq('id', sessionId).maybeSingle();
+  const { data, error } = await adminClient.from('sessions').select('password').eq('id', sessionId).maybeSingle();
   if (error) return c.json({ error: 'Session lookup failed' }, 500);
   if (!data) return c.json({ error: 'Session not found' }, 404);
   if (data.password !== password) return c.json({ error: 'Forbidden' }, 403);
@@ -479,22 +483,22 @@ app.post('/api/sessions/:id/kp', zValidator('json', kpSchema), async (c) => {
   }
 
   const now = nowMs();
-  let state = await getSessionState(userClient, sessionId);
+  let state = await getSessionState(adminClient, sessionId);
   if (!state) return c.json({ error: 'Session not found' }, 404);
   const desiredMode = typeof mode === 'string' ? mode : state.mode;
 
   try {
     if (typeof setTime === 'number' && !Number.isNaN(setTime)) {
-      state = await setGameTime(userClient, sessionId, setTime, now);
+      state = await setGameTime(adminClient, sessionId, setTime, now);
     }
 
     if (action === 'pause') {
-      state = await pauseSession(userClient, sessionId, now);
+      state = await pauseSession(adminClient, sessionId, now);
     } else if (action === 'resume') {
-      state = await resumeSession(userClient, sessionId, now);
+      state = await resumeSession(adminClient, sessionId, now);
     }
 
-    const { error: updateError } = await userClient
+    const { error: updateError } = await adminClient
       .from('sessions')
       .update({ mode: desiredMode ?? 'system', last_updated: toIso(now) })
       .eq('id', sessionId);
@@ -503,7 +507,7 @@ app.post('/api/sessions/:id/kp', zValidator('json', kpSchema), async (c) => {
     return c.json({ error: (err as Error).message }, 500);
   }
 
-  state = (await getSessionState(userClient, sessionId)) ?? state;
+  state = (await getSessionState(adminClient, sessionId)) ?? state;
   const gameTime = computeGameTime(state);
 
   return c.json({ ok: true, state: { ...state, mode: desiredMode, gameTime } });

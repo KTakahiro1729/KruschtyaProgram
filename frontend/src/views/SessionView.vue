@@ -288,7 +288,6 @@ const route = useRoute();
 const sessionId = ref<string | null>((route.params.id as string) ?? null);
 const authSession = ref<Session | null>(null);
 const authUser = computed<User | null>(() => authSession.value?.user ?? null);
-const accessToken = computed(() => authSession.value?.access_token ?? null);
 const chatText = ref('');
 const displayName = ref('');
 const messages = ref<MessageWithResult[]>([]);
@@ -336,9 +335,7 @@ watch(
     sessionId.value = val as string;
     hydrateFromStorage();
     cleanupRealtime();
-    if (accessToken.value) {
-      setupRealtime();
-    }
+    setupRealtime();
     loadMessages();
     loadSessionInfo();
   }
@@ -369,19 +366,12 @@ watch(
 
 watch(messages, () => scrollLog(), { deep: true });
 
-watch(accessToken, (token) => {
-  if (token && sessionId.value) {
-    loadMessages();
-    loadSessionInfo();
-    setupRealtime();
-  }
-});
-
 onMounted(() => {
   hydrateFromStorage();
   initializeAuth();
   loadMessages();
   loadSessionInfo();
+  setupRealtime();
   startClock();
 });
 
@@ -417,7 +407,7 @@ async function initializeAuth() {
   authSession.value = data.session;
   const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
     authSession.value = session;
-    if (session?.access_token && sessionId.value) {
+    if (sessionId.value) {
       loadMessages();
       loadSessionInfo();
     }
@@ -473,19 +463,12 @@ async function sendChat(text: string) {
   const trimmed = text.trim();
 
   if (isCommand(trimmed)) {
-    if (!accessToken.value) {
-      chatError.value = 'コマンド送信にはログインが必要です。';
-      return;
-    }
     try {
       await axios.post(
         `${apiBase}/api/sessions/${sessionId.value}/messages`,
         {
           speakerName: effectiveName.value,
           text: trimmed
-        },
-        {
-          headers: { Authorization: `Bearer ${accessToken.value}` }
         }
       );
       chatText.value = '';
@@ -544,12 +527,9 @@ async function loadMessages() {
 
 async function loadSessionInfo() {
   if (!sessionId.value) return;
-  if (!accessToken.value) return;
   kpPasswordHash.value = null;
   try {
-    const res = await axios.get(`${apiBase}/api/sessions/${sessionId.value}/info`, {
-      headers: { Authorization: `Bearer ${accessToken.value}` }
-    });
+    const res = await axios.get(`${apiBase}/api/sessions/${sessionId.value}/info`);
     kpPasswordHash.value = res.data?.passwordHash ?? null;
     if (res.data?.state) {
       syncStateFromServer(res.data.state);
@@ -608,10 +588,6 @@ async function applyKp(payload: KpPayload) {
     chatError.value = 'KPパスワードを設定してください。';
     return;
   }
-  if (!accessToken.value) {
-    chatError.value = 'KP権限を更新するにはログインが必要です。';
-    return;
-  }
   chatError.value = '';
   try {
     const res = await axios.post(
@@ -622,8 +598,7 @@ async function applyKp(payload: KpPayload) {
         setTime: payload.setTime ?? null,
         action: payload.action,
         confirmQuantum: (payload.mode ?? kpState.mode) === 'quantum'
-      },
-      { headers: { Authorization: `Bearer ${accessToken.value}` } }
+      }
     );
     if (res.data?.state) {
       syncStateFromServer(res.data.state);
