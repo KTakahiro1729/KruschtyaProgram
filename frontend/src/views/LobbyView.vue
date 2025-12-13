@@ -6,7 +6,7 @@
           <p class="text-[10px] uppercase tracking-[0.2em] text-indigo-300">クラウドで遊ぶダイス卓</p>
           <h1 class="text-2xl font-semibold">Cloudflare Dice Room</h1>
           <p class="text-sm text-slate-400">
-            Googleでログインし、セッションを作成または参加してください。作成したセッションはロビーからすぐに入室できます。
+            セッションの作成にはGoogleログインが必要ですが、参加者はセッションIDさえあればログイン不要で入室できます。
           </p>
         </div>
         <div
@@ -58,22 +58,14 @@
 
         <section class="space-y-4 rounded-2xl border border-slate-800 bg-slate-800/60 p-6 shadow-lg shadow-black/20">
           <h2 class="text-lg font-semibold">セッション参加</h2>
-          <p class="text-sm text-slate-400">セッションIDと名前を入力し、入室します。参加後はプレイ画面へ移動します。</p>
-          <div class="grid gap-3 md:grid-cols-2">
+          <p class="text-sm text-slate-400">セッションIDを入力するだけで入室できます。参加後はプレイ画面へ移動します。</p>
+          <div class="grid gap-3 md:grid-cols-1">
             <label class="space-y-1 text-sm text-slate-300">
               <span class="text-xs text-slate-400">セッションID</span>
               <input
                 v-model="join.sessionId"
                 class="w-full rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-sm text-white outline-none focus:border-indigo-400"
                 placeholder="例: abc123"
-              />
-            </label>
-            <label class="space-y-1 text-sm text-slate-300">
-              <span class="text-xs text-slate-400">名前</span>
-              <input
-                v-model="join.name"
-                class="w-full rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-sm text-white outline-none focus:border-indigo-400"
-                placeholder="名前 (任意)"
               />
             </label>
           </div>
@@ -103,11 +95,9 @@ const router = useRouter();
 
 type SessionInfo = { sessionId: string; password: string };
 
-type ParticipantInfo = { participantId: string; name: string };
-
 const authSession = ref<Session | null>(null);
 const session = reactive<SessionInfo>({ sessionId: '', password: '' });
-const join = reactive({ sessionId: '', name: '' });
+const join = reactive({ sessionId: '' });
 const loginError = ref('');
 const joinError = ref('');
 
@@ -183,8 +173,6 @@ async function joinSession() {
   if (!join.sessionId) return;
   joinError.value = '';
   try {
-    const participant: ParticipantInfo = { participantId: crypto.randomUUID(), name: join.name || 'ゲスト' };
-    localStorage.setItem(`kp-participant-${join.sessionId}`, JSON.stringify(participant));
     await router.push({ name: 'session', params: { id: join.sessionId } });
   } catch (err) {
     joinError.value = (err as Error).message ?? '参加に失敗しました';
