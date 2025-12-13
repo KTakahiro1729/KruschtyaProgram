@@ -15,6 +15,13 @@
                 <span class="font-mono text-slate-500">#{{ sessionId }}</span>
             </div>
             <div class="flex items-center gap-2 text-[11px] font-semibold">
+                <a
+                    :href="`${apiBase}/api/sessions/${sessionId}/logs`"
+                    target="_blank"
+                    class="rounded border border-slate-700 px-2 py-0.5 text-slate-300 transition hover:bg-slate-800"
+                >
+                    DL LOGS
+                </a>
                 <span
                     class="rounded border border-slate-700 px-2 py-0.5 text-slate-300"
                     >{{
@@ -637,7 +644,7 @@ function addMessage(msg: ApiMessage) {
     const normalized = normalizeMessage(msg);
     if (messages.value.some((m) => m.id === normalized.id)) return;
     messages.value = [...messages.value, normalized].sort(
-        (a, b) => a.created_at - b.created_at
+        (a, b) => a.real_created_at - b.real_created_at
     );
 }
 
@@ -836,7 +843,7 @@ function applyManualTime() {
 
 function applyLogTimestamp(epoch: number) {
     manualTimeInput.value = formatDatetime(epoch);
-    applyKp({ mode: kpState.mode, setTime: epoch, action: "pause" });
+    activeTab.value = "kp";
 }
 
 function formatClock(epoch: number) {

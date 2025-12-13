@@ -424,6 +424,15 @@ async function rollDie(rng: () => Promise<number>, faces: number) {
     return results;
 }
 
+function formatLogTimestamp(isoStr: string) {
+    const d = new Date(isoStr);
+    if (Number.isNaN(d.getTime())) return isoStr;
+    const pad = (n: number) => n.toString().padStart(2, "0");
+    return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(
+        d.getDate()
+    )} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 async function getRng(
     client: SupabaseClient,
     sessionId: string,
@@ -709,15 +718,39 @@ app.get("/api/sessions/:id/logs", async (c) => {
         .from("chat_messages")
         .select("*")
         .eq("session_id", sessionId)
-        .order("created_at", { ascending: true });
+        .order("real_created_at", { ascending: true });
+
     if (error) return c.json({ error: "Failed to fetch logs" }, 500);
-    const payload = JSON.stringify(data ?? [], null, 2);
-    return new Response(payload, {
+
+    const lines = (data ?? []).map((msg) => {
+        const timeStr = formatLogTimestamp(msg.created_at);
+        const content = msg.rendered_text || msg.raw_text || "";
+        const name = msg.speaker_name || "名無しさん";
+        return `[${timeStr}] ${name} : ${content}`;
+    });
+
+    return new Response(lines.join("\n"), {
         headers: {
-            "Content-Type": "application/json",
-            "Content-Disposition": `attachment; filename="session-${sessionId}.json"`,
+            "Content-Type": "text/plain; charset=utf-8",
+            "Content-Disposition": `attachment; filename="session-${sessionId}.txt"`,
         },
     });
+});
+
+// 自分のセッション一覧取得APIを追加
+app.get("/api/sessions/mine", async (c) => {
+    const auth = await getUserContext(c);
+    if ("response" in auth) return auth.response;
+    const { userClient, user } = auth;
+
+    const { data, error } = await userClient
+        .from("sessions")
+        .select("id, created_at")
+        .eq("owner_id", user.id)
+        .order("created_at", { ascending: false });
+
+    if (error) return c.json({ error: "Failed to fetch sessions" }, 500);
+    return c.json({ sessions: data });
 });
 
 export const onRequest = async (context: {

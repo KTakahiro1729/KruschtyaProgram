@@ -77,9 +77,9 @@
                             }}</span>
                         </p>
                         <p>
-                            パスワード:
+                            セッションID:
                             <span class="font-mono">{{
-                                session.password
+                                session.sessionId
                             }}</span>
                         </p>
                         <p class="text-slate-400">
@@ -100,6 +100,40 @@
                     </div>
                 </section>
             </div>
+
+            <section
+                v-if="user && mySessions.length > 0"
+                class="rounded-2xl border border-slate-800 bg-slate-800/60 p-6 shadow-lg shadow-black/20 space-y-4"
+            >
+                <h2 class="text-lg font-semibold">作成したセッション</h2>
+                <div class="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                    <div
+                        v-for="s in mySessions"
+                        :key="s.id"
+                        class="rounded-lg border border-slate-700 bg-slate-900/40 p-4 space-y-2"
+                    >
+                        <h3 class="font-semibold text-indigo-300 truncate">
+                            {{ s.id }}
+                        </h3>
+                        <p class="text-xs text-slate-500">
+                            {{ new Date(s.created_at).toLocaleString() }}
+                        </p>
+                        <div class="flex gap-2 pt-2">
+                            <RouterLink
+                                :to="`/session/${s.id}`"
+                                class="flex-1 rounded border border-indigo-500/50 bg-indigo-500/10 px-3 py-1 text-center text-xs text-indigo-200 hover:bg-indigo-500/20"
+                                >入室</RouterLink
+                            >
+                            <a
+                                :href="`${apiBase}/api/sessions/${s.id}/logs`"
+                                target="_blank"
+                                class="flex-1 rounded border border-slate-600 bg-slate-800 px-3 py-1 text-center text-xs text-slate-300 hover:bg-slate-700"
+                                >ログDL</a
+                            >
+                        </div>
+                    </div>
+                </div>
+            </section>
         </div>
     </div>
 </template>
@@ -117,6 +151,7 @@ type SessionInfo = { sessionId: string; password: string };
 
 const authSession = ref<Session | null>(null);
 const session = reactive<SessionInfo>({ sessionId: "", password: "" });
+const mySessions = ref<any[]>([]);
 const loginError = ref("");
 const isCreating = ref(false);
 
@@ -145,6 +180,7 @@ async function refreshSession() {
     const { data, error } = await supabase.auth.getSession();
     if (!error) {
         authSession.value = data.session;
+        if (data.session) fetchMySessions();
     }
 }
 
@@ -189,11 +225,24 @@ async function createSession() {
             `kp-session-password-${session.sessionId}`,
             session.password
         );
+        fetchMySessions();
     } catch (err) {
         loginError.value =
             (err as Error).message ?? "セッション作成に失敗しました";
     } finally {
         isCreating.value = false;
+    }
+}
+
+async function fetchMySessions() {
+    if (!user.value) return;
+    try {
+        const res = await axios.get(`${apiBase}/api/sessions/mine`, {
+            headers: authHeaders(),
+        });
+        mySessions.value = res.data.sessions;
+    } catch (err) {
+        console.error("Failed to fetch sessions", err);
     }
 }
 </script>
