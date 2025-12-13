@@ -1,7 +1,7 @@
 <template>
     <div
         v-if="sessionId"
-        class="min-h-[100dvh] bg-slate-900 text-slate-100 flex flex-col"
+        class="h-[100dvh] overflow-hidden bg-slate-900 text-slate-100 flex flex-col"
     >
         <header
             class="h-10 flex items-center justify-between px-4 border-b border-slate-800 bg-slate-900/80 backdrop-blur-md sticky top-0 z-20"
@@ -20,8 +20,8 @@
                     >{{
                         kpState.mode === "quantum" ? "QUANTUM" : "SYSTEM"
                     }}</span
-                >
-                <span
+                ><span
+                    v-if="kpState.enabled"
                     class="rounded-full px-2 py-0.5 text-[10px] font-bold"
                     :class="
                         kpRunning
@@ -93,7 +93,9 @@
                     <span
                         class="font-mono text-sm"
                         :class="
-                            kpRunning ? 'text-emerald-200' : 'text-rose-200'
+                            !kpState.enabled || kpRunning
+                                ? 'text-emerald-200'
+                                : 'text-rose-200'
                         "
                     >
                         {{ gameClockText }}
@@ -595,12 +597,12 @@ function hydrateFromStorage() {
     displayName.value = name ?? "";
     const paletteJson = localStorage.getItem(`kp-palette-${sessionId.value}`);
     palette.value = paletteJson ? JSON.parse(paletteJson) : [];
-    const kpEnabled = localStorage.getItem(`kp-enabled-${sessionId.value}`);
+    const kpEnabled = sessionStorage.getItem(`kp-enabled-${sessionId.value}`);
     kpState.enabled = kpEnabled === "true";
     kpState.password =
-        localStorage.getItem(`kp-session-password-${sessionId.value}`) ?? "";
+        sessionStorage.getItem(`kp-session-password-${sessionId.value}`) ?? "";
     kpState.mode =
-        localStorage.getItem(`kp-mode-${sessionId.value}`) ?? "system";
+        sessionStorage.getItem(`kp-mode-${sessionId.value}`) ?? "system";
     manualTimeInput.value = "";
 }
 
@@ -610,7 +612,7 @@ function persistKpState() {
         `kp-enabled-${sessionId.value}`,
         kpState.enabled ? "true" : "false"
     );
-    localStorage.setItem(`kp-mode-${sessionId.value}`, kpState.mode);
+    sessionStorage.setItem(`kp-mode-${sessionId.value}`, kpState.mode);
 }
 
 function normalizeMessage(msg: ApiMessage): MessageWithResult {
@@ -618,9 +620,15 @@ function normalizeMessage(msg: ApiMessage): MessageWithResult {
         typeof msg.created_at === "string"
             ? Date.parse(msg.created_at)
             : Number(msg.created_at ?? Date.now());
+    const realCreatedAt = msg.real_created_at
+        ? typeof msg.real_created_at === "string"
+            ? Date.parse(msg.real_created_at)
+            : Number(msg.real_created_at)
+        : createdAt;
     return {
         ...msg,
         created_at: createdAt,
+        real_created_at: realCreatedAt,
         parsedResult: parseResult(msg.result_json),
     };
 }
@@ -658,7 +666,8 @@ async function sendChat(text: string) {
     }
 
     const messageId = crypto.randomUUID();
-    const createdAt = new Date().toISOString();
+    const createdAt = new Date(gameClockValue.value).toISOString();
+    const realCreatedAt = new Date().toISOString();
     const { error } = await supabase.from("chat_messages").insert({
         id: messageId,
         session_id: sessionId.value,
@@ -677,7 +686,7 @@ async function sendChat(text: string) {
         session_id: sessionId.value,
         raw_text: trimmed,
         rendered_text: trimmed,
-        created_at: createdAt,
+        created_at: Date.parse(createdAt),
         result_json: null,
         speaker_name: effectiveName.value,
     });
@@ -748,8 +757,14 @@ function syncStateFromServer(
     if (typeof state.game_time_elapsed === "number") {
         kpState.gameTimeElapsed = state.game_time_elapsed;
     }
+    if (state.game_time_elapsed != null) {
+        kpState.gameTimeElapsed = Number(state.game_time_elapsed);
+    }
     if ("last_resumed_at" in state) {
-        kpState.lastResumedAt = state.last_resumed_at ?? null;
+        kpState.lastResumedAt =
+            state.last_resumed_at === null
+                ? null
+                : Number(state.last_resumed_at);
     }
     if (kpState.lastResumedAt === null && typeof state.gameTime === "number") {
         manualTimeInput.value = formatDatetime(state.gameTime);
@@ -768,12 +783,12 @@ function savePalette(val: PaletteItem[]) {
 function unlockKp(passwordInput: string) {
     if (!sessionId.value) return;
     kpState.password = passwordInput;
-    localStorage.setItem(
+    sessionStorage.setItem(
         `kp-session-password-${sessionId.value}`,
         passwordInput
     );
     kpState.enabled = true;
-    localStorage.setItem(`kp-enabled-${sessionId.value}`, "true");
+    sessionStorage.setItem(`kp-enabled-${sessionId.value}`, "true");
     chatText.value = "";
 }
 

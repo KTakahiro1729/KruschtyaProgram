@@ -511,7 +511,6 @@ async function handleMessage(
     // [LOG] DB保存開始
     console.log(`[handleMessage] Inserting message to DB... ID=${id}`);
 
-    // ★前回のパッチ適用済み前提: insertは userClient (RLSポリシーで許可)
     const { error } = await userClient.from("chat_messages").insert({
         id,
         session_id: sessionId,
@@ -519,7 +518,8 @@ async function handleMessage(
         raw_text: raw,
         rendered_text: rendered,
         result_json: result ? JSON.stringify(result) : null,
-        created_at: toIso(ts),
+        created_at: toIso(gameTime),
+        real_created_at: toIso(ts),
         type: messageType,
     });
 
@@ -536,7 +536,7 @@ async function handleMessage(
     return {
         id,
         rendered_text: rendered,
-        created_at: ts,
+        created_at: gameTime,
         raw_text: raw,
         speaker_name: speakerName || "名無しさん",
         result_json: result,
@@ -551,7 +551,7 @@ const messageSchema = z.object({
 const kpSchema = z.object({
     password: z.string().min(1),
     mode: z.string().optional(),
-    setTime: z.number().optional(),
+    setTime: z.number().nullable().optional(),
     action: z.enum(["pause", "resume"]).optional(),
     confirmQuantum: z.boolean().optional(),
 });
@@ -568,7 +568,7 @@ app.post(
         await removeOldSessions(userClient, adminClient, user.id);
 
         const sessionId = uuid();
-        const password = crypto.randomUUID().slice(0, 8);
+        const password = "ProgrammedLife";
         const ts = nowMs();
 
         const { error } = await userClient.from("sessions").insert({
@@ -578,7 +578,7 @@ app.post(
             created_at: toIso(ts),
             last_updated: toIso(ts),
             mode: "system",
-            game_time_elapsed: 0,
+            game_time_elapsed: ts,
             last_resumed_at: ts,
         });
         if (error) return c.json({ error: "Failed to create session" }, 500);

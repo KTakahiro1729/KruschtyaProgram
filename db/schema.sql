@@ -33,7 +33,8 @@ CREATE TABLE chat_messages (
   rendered_text TEXT,
   result_json JSONB,
   type TEXT DEFAULT 'chat',
-  created_at TIMESTAMPTZ DEFAULT now()
+  created_at TIMESTAMPTZ DEFAULT now(),
+  real_created_at TIMESTAMPTZ DEFAULT now()
 );
 
 -- 4. 量子乱数プール
@@ -69,3 +70,4 @@ CREATE POLICY "Anyone can insert messages" ON chat_messages FOR INSERT WITH CHEC
 
 -- Quantum Numbers
 CREATE POLICY "Quantum numbers are viewable by everyone" ON quantum_numbers FOR SELECT USING (true);
+ALTER PUBLICATION supabase_realtime ADD TABLE sessions, chat_messages;
