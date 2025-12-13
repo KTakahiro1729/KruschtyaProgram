@@ -14,12 +14,24 @@
         >
           <div class="space-y-1">
             <p class="text-xs text-slate-500">Googleログイン</p>
-            <p class="text-sm text-slate-400">ポップアップで認証します。成功するとプロフィールが保持されます。</p>
+            <p class="text-sm text-slate-400">Supabase Auth を使用してポップアップで認証します。</p>
           </div>
           <div class="flex flex-col gap-2 md:w-72">
-            <GoogleLogin :callback="onGoogleLogin" ux_mode="popup" type="standard" size="large" text="signin_with" />
+            <button
+              class="w-full rounded-lg bg-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-900/40 transition hover:bg-indigo-500"
+              @click="signInWithGoogle"
+            >
+              Googleでログイン
+            </button>
+            <button
+              v-if="user"
+              class="w-full rounded-lg border border-slate-600 px-4 py-2 text-xs font-semibold text-slate-200 transition hover:border-rose-400 hover:text-rose-200"
+              @click="signOut"
+            >
+              ログアウト
+            </button>
             <p v-if="user" class="rounded border border-emerald-500/40 bg-emerald-900/30 px-3 py-2 text-xs text-emerald-100">
-              ログイン済み: {{ user.name }} ({{ user.email }})
+              ログイン済み: {{ userName }} ({{ userEmail }})
             </p>
             <p v-if="loginError" class="text-xs text-rose-400">{{ loginError }}</p>
           </div>
@@ -81,55 +93,84 @@
 
 <script setup lang="ts">
 import axios from 'axios';
-import { GoogleLogin, type CredentialResponse } from 'vue3-google-login';
-import { reactive, ref, watch } from 'vue';
+import type { Session } from '@supabase/supabase-js';
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
+import { supabase } from '../lib/supabase';
 
 const apiBase = import.meta.env.VITE_WORKER_BASE ?? '';
 const router = useRouter();
 
-type User = { id: string; email: string; name: string; created_at: number };
 type SessionInfo = { sessionId: string; password: string };
 
 type ParticipantInfo = { participantId: string; name: string };
 
-const storedUser = localStorage.getItem('kp-user');
-const user = ref<User | null>(storedUser ? JSON.parse(storedUser) : null);
+const authSession = ref<Session | null>(null);
 const session = reactive<SessionInfo>({ sessionId: '', password: '' });
 const join = reactive({ sessionId: '', name: '' });
 const loginError = ref('');
 const joinError = ref('');
 
-watch(
-  () => user.value,
-  (val) => {
-    if (val) {
-      localStorage.setItem('kp-user', JSON.stringify(val));
-    } else {
-      localStorage.removeItem('kp-user');
-    }
-  },
-  { deep: true }
-);
+const user = computed(() => authSession.value?.user ?? null);
+const accessToken = computed(() => authSession.value?.access_token ?? null);
+const userName = computed(() => user.value?.user_metadata?.full_name ?? user.value?.email ?? '');
+const userEmail = computed(() => user.value?.email ?? '');
 
-async function onGoogleLogin(response: CredentialResponse) {
-  loginError.value = '';
-  try {
-    if (!response.credential) throw new Error('認証に失敗しました');
-    const res = await axios.post(`${apiBase}/api/login/google`, { idToken: response.credential });
-    user.value = res.data.user as User;
-  } catch (err) {
-    loginError.value = (err as Error).message ?? '認証に失敗しました';
+let authSubscription: (() => void) | null = null;
+
+onMounted(async () => {
+  await refreshSession();
+  const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+    authSession.value = session;
+  });
+  authSubscription = () => data.subscription.unsubscribe();
+});
+
+onBeforeUnmount(() => {
+  if (authSubscription) authSubscription();
+});
+
+async function refreshSession() {
+  const { data, error } = await supabase.auth.getSession();
+  if (!error) {
+    authSession.value = data.session;
   }
 }
 
+async function signInWithGoogle() {
+  loginError.value = '';
+  const { error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: { redirectTo: window.location.origin }
+  });
+  if (error) {
+    loginError.value = error.message ?? '認証に失敗しました';
+  }
+}
+
+async function signOut() {
+  await supabase.auth.signOut();
+  authSession.value = null;
+}
+
+function authHeaders() {
+  return accessToken.value ? { Authorization: `Bearer ${accessToken.value}` } : undefined;
+}
+
 async function createSession() {
-  if (!user.value) return;
+  if (!user.value) {
+    loginError.value = 'セッションを作成するにはログインが必要です。';
+    return;
+  }
   try {
-    const res = await axios.post(`${apiBase}/api/sessions`, {
-      ownerEmail: user.value.email,
-      ownerName: user.value.name
-    });
+    const res = await axios.post(
+      `${apiBase}/api/sessions`,
+      {
+        ownerEmail: userEmail.value,
+        ownerName: userName.value
+      },
+      { headers: authHeaders() }
+    );
     session.sessionId = res.data.sessionId;
     session.password = res.data.password;
     join.sessionId = session.sessionId;
@@ -142,8 +183,7 @@ async function joinSession() {
   if (!join.sessionId) return;
   joinError.value = '';
   try {
-    const res = await axios.post(`${apiBase}/api/sessions/${join.sessionId}/join`, { name: join.name });
-    const participant: ParticipantInfo = { participantId: res.data.participantId, name: join.name || 'ゲスト' };
+    const participant: ParticipantInfo = { participantId: crypto.randomUUID(), name: join.name || 'ゲスト' };
     localStorage.setItem(`kp-participant-${join.sessionId}`, JSON.stringify(participant));
     await router.push({ name: 'session', params: { id: join.sessionId } });
   } catch (err) {

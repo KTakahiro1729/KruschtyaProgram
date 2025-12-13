@@ -276,14 +276,19 @@
 
 <script setup lang="ts">
 import axios from 'axios';
+import { Clock3, Crown, List, MessageSquare, Pause, Play, Send, Shuffle, Unlock } from 'lucide-vue-next';
+import type { RealtimeChannel, Session, User } from '@supabase/supabase-js';
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import { Clock3, Crown, List, MessageSquare, Pause, Play, Send, Shuffle, Unlock } from 'lucide-vue-next';
+import { supabase } from '../lib/supabase';
 
 const apiBase = import.meta.env.VITE_WORKER_BASE ?? '';
 const route = useRoute();
 
 const sessionId = ref<string | null>((route.params.id as string) ?? null);
+const authSession = ref<Session | null>(null);
+const authUser = computed<User | null>(() => authSession.value?.user ?? null);
+const accessToken = computed(() => authSession.value?.access_token ?? null);
 const chatText = ref('');
 const displayName = ref('');
 const messages = ref<MessageWithResult[]>([]);
@@ -309,8 +314,13 @@ const kpState = reactive({
 const clockNow = ref(Date.now());
 let timer: number | null = null;
 let lastHashCheckId = 0;
+let chatChannel: RealtimeChannel | null = null;
+let sessionChannel: RealtimeChannel | null = null;
+let authSubscription: (() => void) | null = null;
 
-const effectiveName = computed(() => displayName.value.trim() || '名無しさん');
+const effectiveName = computed(
+  () => displayName.value.trim() || authUser.value?.user_metadata?.full_name || authUser.value?.email || '名無しさん'
+);
 const kpRunning = computed(() => kpState.lastResumedAt !== null);
 const gameClockValue = computed(() => {
   const base = kpState.gameTimeElapsed ?? 0;
@@ -325,6 +335,10 @@ watch(
   (val) => {
     sessionId.value = val as string;
     hydrateFromStorage();
+    cleanupRealtime();
+    if (accessToken.value) {
+      setupRealtime();
+    }
     loadMessages();
     loadSessionInfo();
   }
@@ -355,14 +369,27 @@ watch(
 
 watch(messages, () => scrollLog(), { deep: true });
 
+watch(accessToken, (token) => {
+  if (token && sessionId.value) {
+    loadMessages();
+    loadSessionInfo();
+    setupRealtime();
+  }
+});
+
 onMounted(() => {
   hydrateFromStorage();
+  initializeAuth();
   loadMessages();
   loadSessionInfo();
   startClock();
 });
 
-onBeforeUnmount(() => stopClock());
+onBeforeUnmount(() => {
+  stopClock();
+  cleanupRealtime();
+  if (authSubscription) authSubscription();
+});
 
 type DiceResult = {
   value?: number;
@@ -374,15 +401,29 @@ type DiceResult = {
 };
 type ApiMessage = {
   id: string;
-  created_at: number;
+  created_at: number | string;
   raw_text: string;
   rendered_text: string;
   speaker_name?: string;
   result_json?: string | DiceResult | null;
+  session_id?: string;
 };
-type MessageWithResult = ApiMessage & { parsedResult: DiceResult | null };
+type MessageWithResult = ApiMessage & { parsedResult: DiceResult | null; created_at: number };
 type PaletteItem = { label: string; content: string };
 type KpPayload = { mode?: string; setTime?: number | null; action?: 'pause' | 'resume' };
+
+async function initializeAuth() {
+  const { data } = await supabase.auth.getSession();
+  authSession.value = data.session;
+  const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
+    authSession.value = session;
+    if (session?.access_token && sessionId.value) {
+      loadMessages();
+      loadSessionInfo();
+    }
+  });
+  authSubscription = () => subscription.subscription.unsubscribe();
+}
 
 function startClock() {
   stopClock();
@@ -415,33 +456,100 @@ function persistKpState() {
   localStorage.setItem(`kp-mode-${sessionId.value}`, kpState.mode);
 }
 
+function normalizeMessage(msg: ApiMessage): MessageWithResult {
+  const createdAt = typeof msg.created_at === 'string' ? Date.parse(msg.created_at) : Number(msg.created_at ?? Date.now());
+  return { ...msg, created_at: createdAt, parsedResult: parseResult(msg.result_json) };
+}
+
+function addMessage(msg: ApiMessage) {
+  const normalized = normalizeMessage(msg);
+  if (messages.value.some((m) => m.id === normalized.id)) return;
+  messages.value = [...messages.value, normalized].sort((a, b) => a.created_at - b.created_at);
+}
+
 async function sendChat(text: string) {
   if (!sessionId.value || !text.trim()) return;
   chatError.value = '';
-  try {
-    await axios.post(`${apiBase}/api/sessions/${sessionId.value}/messages`, {
-      speakerName: effectiveName.value,
-      text
-    });
-    chatText.value = '';
-    await loadMessages();
-  } catch (err) {
-    chatError.value = (err as Error).message ?? '送信に失敗しました';
+  const trimmed = text.trim();
+
+  if (isCommand(trimmed)) {
+    if (!accessToken.value) {
+      chatError.value = 'コマンド送信にはログインが必要です。';
+      return;
+    }
+    try {
+      await axios.post(
+        `${apiBase}/api/sessions/${sessionId.value}/messages`,
+        {
+          speakerName: effectiveName.value,
+          text: trimmed
+        },
+        {
+          headers: { Authorization: `Bearer ${accessToken.value}` }
+        }
+      );
+      chatText.value = '';
+    } catch (err) {
+      chatError.value = (err as Error).message ?? '送信に失敗しました';
+    }
+    return;
   }
+
+  const messageId = crypto.randomUUID();
+  const createdAt = new Date().toISOString();
+  const { error } = await supabase.from('chat_messages').insert({
+    id: messageId,
+    session_id: sessionId.value,
+    speaker_name: effectiveName.value,
+    raw_text: trimmed,
+    rendered_text: trimmed,
+    created_at: createdAt
+  });
+  if (error) {
+    chatError.value = error.message ?? '送信に失敗しました';
+    return;
+  }
+  chatText.value = '';
+  addMessage({
+    id: messageId,
+    session_id: sessionId.value,
+    raw_text: trimmed,
+    rendered_text: trimmed,
+    created_at: createdAt,
+    result_json: null,
+    speaker_name: effectiveName.value
+  });
+}
+
+function isCommand(text: string) {
+  const pattern = /^\s*((\d+d\d+)|(cc<=?\d+)|\/)/i;
+  return pattern.test(text);
 }
 
 async function loadMessages() {
   if (!sessionId.value) return;
-  const res = await axios.get(`${apiBase}/api/sessions/${sessionId.value}/messages`);
-  const rawMessages = (res.data.messages ?? []) as ApiMessage[];
-  messages.value = rawMessages.map((msg) => ({ ...msg, parsedResult: parseResult(msg.result_json) }));
+  chatError.value = '';
+  const { data, error } = await supabase
+    .from('chat_messages')
+    .select('*')
+    .eq('session_id', sessionId.value)
+    .order('created_at', { ascending: true });
+  if (error) {
+    chatError.value = error.message ?? 'メッセージの取得に失敗しました';
+    return;
+  }
+  const rawMessages = (data ?? []) as ApiMessage[];
+  messages.value = rawMessages.map((msg) => normalizeMessage(msg));
 }
 
 async function loadSessionInfo() {
   if (!sessionId.value) return;
+  if (!accessToken.value) return;
   kpPasswordHash.value = null;
   try {
-    const res = await axios.get(`${apiBase}/api/sessions/${sessionId.value}/info`);
+    const res = await axios.get(`${apiBase}/api/sessions/${sessionId.value}/info`, {
+      headers: { Authorization: `Bearer ${accessToken.value}` }
+    });
     kpPasswordHash.value = res.data?.passwordHash ?? null;
     if (res.data?.state) {
       syncStateFromServer(res.data.state);
@@ -500,15 +608,23 @@ async function applyKp(payload: KpPayload) {
     chatError.value = 'KPパスワードを設定してください。';
     return;
   }
+  if (!accessToken.value) {
+    chatError.value = 'KP権限を更新するにはログインが必要です。';
+    return;
+  }
   chatError.value = '';
   try {
-    const res = await axios.post(`${apiBase}/api/sessions/${sessionId.value}/kp`, {
-      password: kpState.password,
-      mode: payload.mode ?? kpState.mode,
-      setTime: payload.setTime ?? null,
-      action: payload.action,
-      confirmQuantum: (payload.mode ?? kpState.mode) === 'quantum'
-    });
+    const res = await axios.post(
+      `${apiBase}/api/sessions/${sessionId.value}/kp`,
+      {
+        password: kpState.password,
+        mode: payload.mode ?? kpState.mode,
+        setTime: payload.setTime ?? null,
+        action: payload.action,
+        confirmQuantum: (payload.mode ?? kpState.mode) === 'quantum'
+      },
+      { headers: { Authorization: `Bearer ${accessToken.value}` } }
+    );
     if (res.data?.state) {
       syncStateFromServer(res.data.state);
     } else if (payload.mode) {
@@ -691,5 +807,42 @@ function scrollLog() {
       logRef.value.scrollTop = logRef.value.scrollHeight;
     }
   });
+}
+
+function setupRealtime() {
+  cleanupRealtime();
+  if (!sessionId.value) return;
+  chatChannel = supabase
+    .channel(`chat:${sessionId.value}`)
+    .on(
+      'postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `session_id=eq.${sessionId.value}` },
+      (payload) => {
+        addMessage(payload.new as ApiMessage);
+      }
+    )
+    .subscribe();
+
+  sessionChannel = supabase
+    .channel(`session:${sessionId.value}`)
+    .on(
+      'postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: 'sessions', filter: `id=eq.${sessionId.value}` },
+      (payload) => {
+        syncStateFromServer(payload.new as Record<string, unknown>);
+      }
+    )
+    .subscribe();
+}
+
+function cleanupRealtime() {
+  if (chatChannel) {
+    supabase.removeChannel(chatChannel);
+    chatChannel = null;
+  }
+  if (sessionChannel) {
+    supabase.removeChannel(sessionChannel);
+    sessionChannel = null;
+  }
 }
 </script>
