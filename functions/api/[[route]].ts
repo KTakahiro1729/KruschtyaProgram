@@ -258,7 +258,7 @@ async function resumeSession(client: SupabaseClient, sessionId: string, now = no
   if (state.last_resumed_at !== null) return state;
   const { error } = await client
     .from('sessions')
-    .update({ last_resumed_at: toIso(now), last_updated: toIso(now) })
+    .update({ last_resumed_at: now, last_updated: toIso(now) })
     .eq('id', sessionId);
   if (error) throw new Error('Failed to resume session');
   return { ...state, last_resumed_at: now } satisfies SessionState;
@@ -409,7 +409,7 @@ app.post('/api/sessions', zValidator('json', createSessionSchema), async (c) => 
     last_updated: toIso(ts),
     mode: 'system',
     game_time_elapsed: 0,
-    last_resumed_at: toIso(ts)
+    last_resumed_at: ts
   });
   if (error) return c.json({ error: 'Failed to create session' }, 500);
 
