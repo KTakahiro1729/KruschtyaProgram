@@ -93,6 +93,7 @@ app.use('*', cors());
 
 const nowMs = () => Date.now();
 const uuid = () => crypto.randomUUID();
+const toIso = (ts: number) => new Date(ts).toISOString();
 
 function createSupabaseClient(url: string, key: string, token?: string) {
   const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
@@ -129,10 +130,19 @@ type SessionState = {
 };
 
 function normalizeSessionState(row: Record<string, unknown>): SessionState {
+  const parseTimestamp = (value: unknown) => {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'number') return value;
+    if (typeof value === 'string') {
+      const parsed = Date.parse(value);
+      return Number.isNaN(parsed) ? null : parsed;
+    }
+    return null;
+  };
   return {
     mode: String(row.mode ?? 'system'),
     game_time_elapsed: Number(row.game_time_elapsed ?? 0),
-    last_resumed_at: row.last_resumed_at === null || row.last_resumed_at === undefined ? null : Number(row.last_resumed_at)
+    last_resumed_at: parseTimestamp(row.last_resumed_at)
   };
 }
 
@@ -171,9 +181,9 @@ async function ensureUserRecord(client: SupabaseClient, user: User) {
     id: user.id,
     email: user.email ?? '',
     name: (meta.name as string | undefined) ?? (meta.full_name as string | undefined) ?? user.email ?? 'Unknown',
-    created_at: now
+    created_at: toIso(now)
   };
-  const { error } = await client.from('users').upsert(payload, { onConflict: 'id' });
+  const { error } = await client.from('profiles').upsert(payload, { onConflict: 'id' });
   if (error) throw new Error('Failed to sync user');
   return payload;
 }
@@ -198,7 +208,8 @@ async function storeQuantumBatch(client: SupabaseClient, sessionId: string, numb
   const rows = numbers.map((value) => ({ session_id: sessionId, value, consumed: false }));
   const { error } = await client.from('quantum_numbers').insert(rows);
   if (error) throw new Error('Failed to store quantum numbers');
-  await client.from('sessions').update({ last_updated: nowMs() }).eq('id', sessionId);
+  const ts = nowMs();
+  await client.from('sessions').update({ last_updated: toIso(ts) }).eq('id', sessionId);
 }
 
 async function nextQuantumNumber(client: SupabaseClient, sessionId: string): Promise<number | null> {
@@ -235,7 +246,7 @@ async function pauseSession(client: SupabaseClient, sessionId: string, now = now
   const updatedElapsed = state.game_time_elapsed + (now - state.last_resumed_at);
   const { error } = await client
     .from('sessions')
-    .update({ game_time_elapsed: updatedElapsed, last_resumed_at: null, last_updated: now })
+    .update({ game_time_elapsed: updatedElapsed, last_resumed_at: null, last_updated: toIso(now) })
     .eq('id', sessionId);
   if (error) throw new Error('Failed to pause session');
   return { ...state, game_time_elapsed: updatedElapsed, last_resumed_at: null } satisfies SessionState;
@@ -247,7 +258,7 @@ async function resumeSession(client: SupabaseClient, sessionId: string, now = no
   if (state.last_resumed_at !== null) return state;
   const { error } = await client
     .from('sessions')
-    .update({ last_resumed_at: now, last_updated: now })
+    .update({ last_resumed_at: toIso(now), last_updated: toIso(now) })
     .eq('id', sessionId);
   if (error) throw new Error('Failed to resume session');
   return { ...state, last_resumed_at: now } satisfies SessionState;
@@ -258,7 +269,7 @@ async function setGameTime(client: SupabaseClient, sessionId: string, gameTime: 
   if (!state) throw new Error('Session not found');
   const { error } = await client
     .from('sessions')
-    .update({ game_time_elapsed: gameTime, last_resumed_at: null, last_updated: now })
+    .update({ game_time_elapsed: gameTime, last_resumed_at: null, last_updated: toIso(now) })
     .eq('id', sessionId);
   if (error) throw new Error('Failed to set game time');
   return { ...state, game_time_elapsed: gameTime, last_resumed_at: null } satisfies SessionState;
@@ -336,7 +347,7 @@ async function handleMessage(
   if (!session) throw new Error('Session not found');
   const mode = session.mode;
   const gameTime = computeGameTime(session);
-  const rng = await getRng(userClient, sessionId, mode, gameTime);
+  const rng = await getRng(adminClient, sessionId, mode, gameTime);
   const parsed = parseDiceCommand(raw.split(' ')[0]);
   let rendered = raw;
   let result: Record<string, unknown> | null = null;
@@ -361,7 +372,7 @@ async function handleMessage(
     raw_text: raw,
     rendered_text: rendered,
     result_json: result ? JSON.stringify(result) : null,
-    created_at: ts,
+    created_at: toIso(ts),
     type: messageType
   });
   if (error) throw new Error('Failed to store message');
@@ -394,17 +405,17 @@ app.post('/api/sessions', zValidator('json', createSessionSchema), async (c) => 
     id: sessionId,
     owner_id: user.id,
     password,
-    created_at: ts,
-    last_updated: ts,
+    created_at: toIso(ts),
+    last_updated: toIso(ts),
     mode: 'system',
     game_time_elapsed: 0,
-    last_resumed_at: ts
+    last_resumed_at: toIso(ts)
   });
   if (error) return c.json({ error: 'Failed to create session' }, 500);
 
   const quantum = (await fetchQuantumNumbers()) ?? fallbackCryptoNumbers();
   try {
-    await storeQuantumBatch(userClient, sessionId, quantum);
+    await storeQuantumBatch(adminClient, sessionId, quantum);
   } catch (err) {
     return c.json({ error: (err as Error).message }, 500);
   }
@@ -485,7 +496,7 @@ app.post('/api/sessions/:id/kp', zValidator('json', kpSchema), async (c) => {
 
     const { error: updateError } = await userClient
       .from('sessions')
-      .update({ mode: desiredMode ?? 'system', last_updated: now })
+      .update({ mode: desiredMode ?? 'system', last_updated: toIso(now) })
       .eq('id', sessionId);
     if (updateError) throw new Error('Failed to update session');
   } catch (err) {
