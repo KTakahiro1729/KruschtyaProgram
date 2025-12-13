@@ -556,41 +556,42 @@ const kpSchema = z.object({
     confirmQuantum: z.boolean().optional(),
 });
 
-// メッセージ受信APIエンドポイント部分
 app.post(
-    "/api/sessions/:id/messages",
-    zValidator("json", messageSchema),
+    "/api/sessions",
+    zValidator("json", createSessionSchema),
     async (c) => {
-        const sessionId = c.req.param("id");
-        console.log(`[API] POST messages called. SessionID=${sessionId}`); // [LOG]
-
         const auth = await getUserContext(c);
-        if ("response" in auth) {
-            console.warn(
-                `[API] Auth check failed or returned response directly.`
-            ); // [LOG]
-            return auth.response;
-        }
+        if ("response" in auth) return auth.response;
+        const { userClient, adminClient, user } = auth;
 
-        const { userClient, adminClient } = auth;
-        const { speakerName, text } = c.req.valid("json");
+        await ensureUserRecord(userClient, user);
+        await removeOldSessions(userClient, adminClient, user.id);
 
-        console.log(`[API] Payload: speaker="${speakerName}", text="${text}"`); // [LOG]
+        const sessionId = uuid();
+        const password = crypto.randomUUID().slice(0, 8);
+        const ts = nowMs();
 
+        const { error } = await userClient.from("sessions").insert({
+            id: sessionId,
+            owner_id: user.id,
+            password,
+            created_at: toIso(ts),
+            last_updated: toIso(ts),
+            mode: "system",
+            game_time_elapsed: 0,
+            last_resumed_at: ts,
+        });
+        if (error) return c.json({ error: "Failed to create session" }, 500);
+
+        const quantum =
+            (await fetchQuantumNumbers()) ?? fallbackCryptoNumbers();
         try {
-            const message = await handleMessage(
-                userClient,
-                adminClient,
-                sessionId,
-                speakerName ?? "名無しさん",
-                text
-            );
-            console.log(`[API] Response 200 OK`); // [LOG]
-            return c.json({ message });
+            await storeQuantumBatch(adminClient, sessionId, quantum);
         } catch (err) {
-            console.error(`[API] Error 400:`, err); // [LOG]
-            return c.json({ error: (err as Error).message }, 400);
+            return c.json({ error: (err as Error).message }, 500);
         }
+
+        return c.json({ sessionId, password });
     }
 );
 

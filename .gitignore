@@ -9,4 +9,4 @@ npm-debug.log*
 pnpm-lock.yaml
 *.vars
 *.env
-.wrangler/*
+.wrangler
