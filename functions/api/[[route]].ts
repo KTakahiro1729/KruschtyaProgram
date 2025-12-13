@@ -539,6 +539,7 @@ async function handleMessage(
         created_at: ts,
         raw_text: raw,
         speaker_name: speakerName || "名無しさん",
+        result_json: result,
     };
 }
 
